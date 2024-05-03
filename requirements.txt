@@ -1,0 +1,11 @@
+numpy
+ultralytics
+scikit-learn
+scikit-image
+motmetrics
+tabulate
+pytube
+pyrr
+filterpy
+pykalman
+onnxruntime

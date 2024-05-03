@@ -1,0 +1,1 @@
+docker build -f dockerfile -t conda-image-tracker_mmr .
