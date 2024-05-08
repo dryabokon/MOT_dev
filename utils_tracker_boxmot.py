@@ -11,7 +11,7 @@ import tools_image
 import tools_draw_numpy
 # ----------------------------------------------------------------------------------------------------------------------
 class Tracker_boxmot:
-    def __init__(self,folder_out,device='cuda:0'):
+    def __init__(self,folder_out,device='cuda:0',algorithm='DEEPSORT'):
         if not os.path.isdir(folder_out):
             os.mkdir(folder_out)
 
@@ -22,9 +22,14 @@ class Tracker_boxmot:
         # self.tracker = DeepOCSORT(model_weights=Path('osnet_x0_25_msmt17.pt'),device=device,fp16=False,per_class=True,embedding_off=False)
 
         #OK
-        #self.tracker = BYTETracker()
-        #self.tracker = OCSORT()
-        self.tracker = BoTSORT(model_weights=Path('osnet_x0_25_msmt17.pt'),device=device,fp16=False)
+        if algorithm == 'OCSORT':
+            self.tracker = OCSORT()
+        elif algorithm == 'BYTE':
+            self.tracker = BYTETracker()
+        elif algorithm == 'BOTSORT':
+            self.tracker = BoTSORT(model_weights=Path('osnet_x0_25_msmt17.pt'),device=device,fp16=False)
+        else:
+            self.tracker = None
 
         self.colors80 = tools_draw_numpy.get_colors(80, colormap='nipy_spectral', shuffle=True)
 
