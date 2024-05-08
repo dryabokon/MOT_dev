@@ -18,7 +18,7 @@ import tools_time_profiler
 from CV import tools_vanishing
 # ----------------------------------------------------------------------------------------------------------------------
 class Pipeliner:
-    def __init__(self,folder_out,Detector,Tracker,Tokenizer=None,is_gt_xywh=False,obj_types_id=[],n_lanes=None,limit=None):
+    def __init__(self,folder_out,Detector,Tracker,Tokenizer=None,is_gt_xywh=False,obj_types_id=[],n_lanes=None,start=0,limit=None):
         if not os.path.isdir(folder_out):
             os.mkdir(folder_out)
         self.is_gt_xywh = is_gt_xywh
@@ -26,6 +26,7 @@ class Pipeliner:
         self.folder_runs = './runs/'
         self.df_summary = None
         self.n_lanes = n_lanes
+        self.start = start
         self.limit = limit
         self.folder_in = None
         self.folder_out = folder_out
@@ -156,6 +157,9 @@ class Pipeliner:
                 df_embedding = self.__get_features(filename, df_det,frame_id)
                 df_det = pd.concat([df_det, df_embedding], axis=1)
 
+            if frame_id == 65:
+                df_det = pd.DataFrame([], columns=['class_ids', 'x1', 'y1', 'x2', 'y2', 'conf'])
+
             df_track = self.__get_tracks(filename, df_det, frame_id=frame_id,do_debug=do_debug)
             df_track = self.match_E(df_det, df_track)
 
@@ -167,8 +171,9 @@ class Pipeliner:
 
         if is_video:
             vidcap = cv2.VideoCapture(source)
-            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.start
             if self.limit is not None: total_frames = min(total_frames, self.limit)
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.start)
             for i in tqdm(range(total_frames), total=total_frames, desc=inspect.currentframe().f_code.co_name):
                 success, image = vidcap.read()
                 if not success: continue
@@ -179,7 +184,7 @@ class Pipeliner:
             vidcap.release()
         else:
             self.folder_in = source
-            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')
+            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.start:]
             if self.limit is not None: filenames = filenames[:self.limit]
             for i,filename in tqdm(enumerate(filenames),total=len(filenames),desc=inspect.currentframe().f_code.co_name):
                 function(source + filename, frame_id=i + 1, do_debug=do_debug)
@@ -412,8 +417,9 @@ class Pipeliner:
         is_video = ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower())
         if is_video:
             vidcap = cv2.VideoCapture(source)
-            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.start
             if self.limit is not None: total_frames = min(total_frames, self.limit)
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.start)
             for i in tqdm(range(total_frames), total=total_frames, desc='Extracting frames'):
                 success, image = vidcap.read()
                 cv2.imwrite(self.folder_out + 'frame_%06d.jpg' % i, image)
@@ -440,7 +446,7 @@ class Pipeliner:
             self.df_pred['lane_number'] = 0
 
         image_time_lapse = self.draw_time_lapse(self.df_pred, H=int(H * 0.1),W=W,font_size=font_size)
-        self.draw_dashboard(source, self.df_pred, image_BEV=image_BEV, h_ipersp=h_ipersp,image_time_lapse=image_time_lapse)
+        self.draw_dashboard(source, self.df_pred, image_BEV=image_BEV, h_ipersp=h_ipersp,image_time_lapse=image_time_lapse,font_size=font_size)
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def pipe_12_make_video(self,source):
@@ -509,12 +515,12 @@ class Pipeliner:
         th = float(self.df_summary_custom.iloc[-1].iloc[-1]) if self.df_summary_custom is not None else 0.7
         return th
 # ----------------------------------------------------------------------------------------------------------------------
-    def draw_dashboard(self, folder_in_images, df_pred, h_ipersp=None, image_BEV=None,image_time_lapse=None):
+    def draw_dashboard(self, folder_in_images, df_pred, h_ipersp=None, image_BEV=None,image_time_lapse=None,font_size=64):
 
-        filenames = tools_IO.get_filenames(folder_in_images, '*.jpg,*.png')
+        filenames = tools_IO.get_filenames(folder_in_images, '*.jpg,*.png')[self.start:]
         if self.limit is not None: filenames = filenames[:self.limit]
         colors80 = tools_draw_numpy.get_colors(80, shuffle=True)
-        font_size = 64
+
         transperency = 0.5
         w = 12
 
@@ -541,7 +547,9 @@ class Pipeliner:
                         lines = numpy.concatenate((centers[:-1], centers[1:]), axis=1).astype(int)
                         image = tools_draw_numpy.draw_lines(image, lines, color=color, w=w, transperency=transperency,antialiasing=False)
 
-                    image = tools_draw_numpy.draw_text(image, str(obj_id), (int(cx[0]), int(cy[0])), color_fg=color_fg, clr_bg=color,font_size=font_size,hor_align='center',vert_align='center')
+                    #image = tools_draw_numpy.draw_rects(image,points[0].reshape((1,2,2)),label ,color, w=1)
+                    image = tools_draw_numpy.draw_rect(image, int(points[0][0]), int(points[0][1]), int(points[0][2]), int(points[0][3]), color, w=1,label=str(obj_id),font_size= font_size,alpha_transp=0.9)
+                    #image = tools_draw_numpy.draw_text(image, str(obj_id), (int(cx[0]), int(cy[0])), color_fg=color_fg, clr_bg=color,font_size=font_size,hor_align='center',vert_align='center')
 
                     if 'mmr_type' in det_local.columns and 'conf_mmr' in det_local.columns and 'model_color' in det_local.columns and 'lp_symb' in det_local.columns:
                         mmr_type = det_local['mmr_type'].iloc[0]

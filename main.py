@@ -16,8 +16,8 @@ def init_pipeline():
     parser.add_argument('--input', '-i', help='path to folder or video',default='./images/international/CZ_20240426_180502_2F57_B8A44F960ACE/')
     parser.add_argument('--output', '-out', help='path to output folder', default=folder_out)
     parser.add_argument('--detector', '-d', help='yolo | LPVD', default='LPVD')
-    parser.add_argument('--tracker', '-d', help='DEEPSORT | OCSORT | BYTE | BOTSORT', default='DEEPSORT')
-    parser.add_argument('--tokenizer', '-t', help='MMR | NONE', default='MMR')
+    parser.add_argument('--tracker', '-t', help='DEEPSORT | OCSORT | BYTE | BOTSORT', default='DEEPSORT')
+    parser.add_argument('--tokenizer', '-k', help='MMR | NONE', default='MMR')
     parser.add_argument('--n_lanes', '-l', help='number of lanes: 2,3,4..', default=None)
     parser.add_argument('--start', help='# of frames from the input', default=120)
     parser.add_argument('--limit', help='# of frames from the input', default=180)
@@ -29,7 +29,7 @@ def init_pipeline():
     if args.tracker == 'DEEPSORT':
         T = utils_tracker_deep_sort.Tracker_deep_sort(folder_out)
     else:
-        T = utils_tracker_boxmot.Tracker_boxmot(folder_out,args.tracker)
+        T = utils_tracker_boxmot.Tracker_boxmot(folder_out,algorithm=args.tracker)
 
     K = utils_tokenizer_MMR.Tokenizer_MMR(folder_out) if args.tokenizer == 'MMR' else None
 

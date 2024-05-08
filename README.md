@@ -5,8 +5,8 @@ You can run the project using the command python main.py followed by the paramet
 - --input or -i: This parameter is used to specify the path to the folder or video. 
 - --output or -out: This parameter is used to specify the path to the output folder. 
 - --detector or -d: This parameter is used to specify the detector to use. The options are 'yolo' or 'LPVD'. The default value is 'LPVD'. 
-- --tracker: This parameter is used to specify the tracker to use. The options are 'DEEPSORT', 'OCSORT', 'BYTE', 'BOTSORT'. The default value is 'DEEPSORT'. 
-- --tokenizer or -t: This is an optional parameter used to specify the tokenizer. The options are 'MMR' or 'NONE'. The default value is 'MMR'. 
+- --tracker or -t: This parameter is used to specify the tracker to use. The options are 'DEEPSORT', 'OCSORT', 'BYTE', 'BOTSORT'. The default value is 'DEEPSORT'. 
+- --tokenizer or -k: This is an optional parameter used to specify the tokenizer. The options are 'MMR' or 'NONE'. The default value is 'MMR'. 
 - --n_lanes or -l: This is an optional parameter used to specify the number of lanes. It can be any integer value like 2, 3, 4, etc. Keep it empty to prevent build of the BEV images.
 - --start: This parameter is used to specify the number of frames from the input. The default value is 120. 
 - --limit: This parameter is used to specify the limit of frames from the input. The default value is 180.
