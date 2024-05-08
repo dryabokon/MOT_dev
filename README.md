@@ -11,7 +11,7 @@ You can run the project using the command python main.py followed by the paramet
 - --start: This parameter is used to specify the number of frames from the input. The default value is 120. 
 - --limit: This parameter is used to specify the limit of frames from the input. The default value is 180.
 
-python main.py --input ./path/to/input --output ./path/to/output --detector yolo --tracker DEEPSORT --tokenizer MMR --n_lanes 3 --start 100 --limit 200
+** python main.py --input ./path/to/input --output ./path/to/output --detector yolo --tracker DEEPSORT --tokenizer MMR --n_lanes 3 --start 100 --limit 200 **
 
 
 Alternatively you may run the project in docker, see example of the script below
@@ -21,6 +21,6 @@ Alternatively you may run the project in docker, see example of the script below
 - n_lanes=4
 - limit=10
 
-docker run --gpus all -v ${PWD}:/home --workdir /home -it $img python3 main.py --input $source --n_lanes $n_lanes --limit $limit --tokenizer None
+** docker run --gpus all -v ${PWD}:/home --workdir /home -it $img python3 main.py --input $source --n_lanes $n_lanes --limit $limit --tokenizer None **
 
 ![alt text](/output/Image.png)
