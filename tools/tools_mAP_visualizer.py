@@ -309,7 +309,7 @@ class Track_Visualizer:
     def cut_boxes_at_original(self, image, xyxy, pad=10):
         H, W = image.shape[:2]
         mask = numpy.full((image.shape[0], image.shape[1]), 1, dtype=numpy.uint8)
-        for box in xyxy:
+        for box in xyxy.astype(int):
             image[max(0, box[1] - pad):min(box[3] + pad, W), max(0, box[0] - pad):min(box[2] + pad, H)] = 0
             mask[max(0, box[1] - pad):min(box[3] + pad, W), max(0, box[0] - pad):min(box[2] + pad, H)] = 0
 
