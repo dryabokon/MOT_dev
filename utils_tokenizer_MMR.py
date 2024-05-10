@@ -28,6 +28,21 @@ class Tokenizer_MMR:
         self.df_true['x2'] += self.df_true['x1']
         self.df_true['y2'] += self.df_true['y1']
         self.colors80 = tools_draw_numpy.get_colors(80, colormap='nipy_spectral', shuffle=True)
+        self.dct_mmr_clr={
+            "beige":tools_draw_numpy.BGR_from_HTML(color_HTML='#FBECD3')[[2,1,0]],
+            "black":tools_draw_numpy.BGR_from_HTML(color_HTML='#000000')[[2,1,0]],
+            "blue":tools_draw_numpy.BGR_from_HTML(color_HTML='#0080FF')[[2,1,0]],
+            "brown":tools_draw_numpy.BGR_from_HTML(color_HTML='#743C00')[[2,1,0]],
+            "gray":tools_draw_numpy.BGR_from_HTML(color_HTML='#808080')[[2,1,0]],
+            "green":tools_draw_numpy.BGR_from_HTML(color_HTML='#008000')[[2,1,0]],
+            "orange":tools_draw_numpy.BGR_from_HTML(color_HTML='#FF8000')[[2,1,0]],
+            "red":tools_draw_numpy.BGR_from_HTML(color_HTML='#C00000')[[2,1,0]],
+            "silver":tools_draw_numpy.BGR_from_HTML(color_HTML='#808080')[[2,1,0]],
+            "white":tools_draw_numpy.BGR_from_HTML(color_HTML='#FFFFFF')[[2,1,0]],
+            "yellow":tools_draw_numpy.BGR_from_HTML(color_HTML='#FFC000')[[2,1,0]],
+            "nan":tools_draw_numpy.BGR_from_HTML(color_HTML='#FFFFFF')[[2,1,0]],
+            "": tools_draw_numpy.BGR_from_HTML(color_HTML='#FFFFFF')[[2, 1, 0]]
+        }
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def name_columns(self, df):

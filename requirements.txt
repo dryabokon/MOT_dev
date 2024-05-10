@@ -9,3 +9,4 @@ pyrr
 filterpy
 pykalman
 onnxruntime
+boxmot

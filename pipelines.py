@@ -77,6 +77,10 @@ class Pipeliner:
         self.df_pred = self.name_columns(df_pred)
         return
 # ----------------------------------------------------------------------------------------------------------------------
+    def update_LP_GT(self,df_LP_GT):
+        self.df_LP_GT = df_LP_GT
+        return
+# ----------------------------------------------------------------------------------------------------------------------
     def match_E(self,df_det,df_track):
 
         col_start = [c for c in df_det.columns].index('conf') + 1
@@ -330,6 +334,15 @@ class Pipeliner:
 
         return
 # ----------------------------------------------------------------------------------------------------------------------
+    def is_valid_LP(self,lp_symb):
+        # check if lp_symp complies with pattern LLDDDDLL where LL is a letter and DDD is a digit
+        if lp_symb is None: return False
+        if len(lp_symb) != 8: return False
+        if not lp_symb[:2].isalpha(): return False
+        if not lp_symb[2:5].isdigit(): return False
+        if not lp_symb[6:].isalpha(): return False
+        return True
+# ----------------------------------------------------------------------------------------------------------------------
     def pipe_09_profiles(self, source):
         def get_image(source,df_filenames,frame_id):
             if 'filename' in df_filenames.columns:
@@ -340,37 +353,76 @@ class Pipeliner:
                 success, image = vidcap.read()
             return image
 
-        is_video = ('mp4' in source) or ('avi' in source)
+        is_video = ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower())
         if is_video:
             vidcap = cv2.VideoCapture(source)
-            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.start
+            if self.limit is not None: total_frames = min(total_frames, self.limit)
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.start)
             df_filenames = pd.DataFrame({'frame_id': numpy.arange(1, 1+total_frames)})
         else:
-            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')
+            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.start:]
+            if self.limit is not None: filenames = filenames[:self.limit]
             df_filenames = pd.DataFrame({'frame_id': numpy.arange(1, 1 + len(filenames)), 'filename': filenames})
 
         tools_IO.remove_folders(self.folder_out)
+        tools_IO.remove_files(self.folder_out, 'profile_*.png')
+
+        if 'lp_symb' in self.df_pred.columns:
+            self.df_pred['lp_symb'] = self.df_pred['lp_symb'].apply(lambda x: x if self.is_valid_LP(str(x)) else None)
+            df_LPR = tools_DF.my_agg(self.df_pred,cols_groupby=['track_id'],cols_value=['lp_symb','model_color','mmr_type'],aggs=['top','top','top'])
+            df_LPR.to_csv(self.folder_out + 'df_LPs.csv', index=False)
+        else:
+            df_LPR = pd.DataFrame([])
 
         for obj_id in tqdm(self.df_pred['track_id'].unique(), total=self.df_pred['track_id'].unique().shape[0],desc=inspect.currentframe().f_code.co_name):
-            os.mkdir(self.folder_out + 'profile_%03d' % obj_id)
-            df_repr = self.df_pred[self.df_pred['track_id'] == obj_id]
-            for r in range(df_repr.shape[0]):
-                frame_id = df_repr.iloc[r]['frame_id']
-                image = get_image(source,df_filenames,frame_id)
-                rect = df_repr.iloc[r][['x1', 'y1', 'x2', 'y2']].values.astype(int)
-                confidence = df_repr.iloc[r]['conf']
-                confidence = 0 if numpy.isnan(confidence) else confidence
-                image_crop = image[rect[1]:rect[3], rect[0]:rect[2]]
-                cv2.imwrite(self.folder_out + '/profile_%03d/'% obj_id + '%06d.png' % (frame_id) , image_crop)
+            df_repr = self.df_pred[self.df_pred['track_id'] == obj_id].copy()
+            if 'lp_symb' in df_repr.columns:
+                df_repr['lp_symb_good'] = df_repr['lp_symb'].apply(lambda x: x if self.is_valid_LP(str(x)) else None)
+                df_repr = df_repr.sort_values(by='lp_symb_good',ascending=False)
 
-        return
+            image = get_image(source, df_filenames, df_repr.iloc[0]['frame_id'])
+            rect = df_repr.iloc[0][['x1', 'y1', 'x2', 'y2']].values.astype(int)
+            image_crop = image[rect[1]:rect[3], rect[0]:rect[2]]
+            if 'lp_symb' in df_repr:
+                lp_symb,model_color, mmr_type = tools_DF.my_agg(df_repr, cols_groupby=['track_id'],cols_value=['lp_symb','model_color', 'mmr_type'], aggs=['top','top', 'top'])[['lp_symb','model_color','mmr_type']].values.tolist()[0]
+                lp_symb, model_color, mmr_type = str(lp_symb), str(model_color), str(mmr_type)
+            else:
+                lp_symb, model_color, mmr_type = 'nan','nan','nan'
+            image_crop = tools_draw_numpy.draw_text(image_crop, mmr_type, (10, 10), font_size=20, color_fg=(255, 255, 255),clr_bg=(128,128,128),alpha_transp=0.5)
+            if self.Tokenizer is not None:
+                image_crop = tools_draw_numpy.draw_text(image_crop, '█', (10, 30), font_size=20,color_fg=self.Tokenizer.dct_mmr_clr[model_color], clr_bg=None)
+            image_crop = tools_draw_numpy.draw_text(image_crop, model_color, (30, 30), font_size=20,color_fg=(255, 255, 255),clr_bg=(128,128,128), alpha_transp=0.75)
+
+
+            image_crop = tools_draw_numpy.draw_text(image_crop, lp_symb, (image_crop.shape[1]//2, image_crop.shape[0]-30),font_size=20, color_fg=(0, 0, 0), clr_bg=(255, 255, 255),hor_align='center',alpha_transp=0.5)
+            cv2.imwrite(self.folder_out + (f'profile %03d_{lp_symb}_{model_color}_{mmr_type}'%obj_id).replace(' ','_') +'.png', image_crop)
+
+        return df_LPR
 # ----------------------------------------------------------------------------------------------------------------------
-    def pipe_10_get_background_image(self, source, filename_out=None):
+    def get_background_image(self, source, filename_out=None):
         image_clear_bg = self.V.remove_bg(source, self.df_pred)
         if filename_out is not None:
             cv2.imwrite(self.folder_out + filename_out, image_clear_bg)
         return image_clear_bg
 # ----------------------------------------------------------------------------------------------------------------------
+    def pipe_10_draw_trajectories(self):
+        points = self.df_pred[['x1', 'y1', 'x2', 'y2']].values
+        is_hit = self.df_pred['lp_symb'].isin(self.df_LP_GT['lp_symb'])
+
+        centers = numpy.concatenate(
+            (points[:, [0, 2]].mean(axis=1).reshape((-1, 1)), points[:, [1, 3]].mean(axis=1).reshape((-1, 1))),
+            axis=1).astype(float).reshape((-1, 2))
+        image = numpy.full((int(centers[:, 1].max()), int(centers[:, 0].max()), 3), 32, dtype=numpy.uint8)
+        colors = [(100, 200, 0) if hit else (0, 0, 200) for hit in is_hit]
+        if 'lane_number' in self.df_pred.columns:
+            colors80 = tools_draw_numpy.get_colors(80, shuffle=True)
+            colors = [colors80[(l - 1) % 80] for l in self.df_pred['lane_number'].values]
+
+        image = tools_draw_numpy.draw_points(image, centers, color=colors, w=165, transperency=0.85)
+        cv2.imwrite(self.folder_out + 'trajectories.png', image)
+        return image
+    # ----------------------------------------------------------------------------------------------------------------------
     def get_VP(self,image_debug=None):
         lines = []
         obj_ids = self.df_pred['track_id'].unique()
@@ -431,7 +483,7 @@ class Pipeliner:
         H, W = cv2.imread(source + filenames[0]).shape[:2]
 
         if self.n_lanes is not None:
-            image_bg = self.pipe_10_get_background_image(source)
+            image_bg = self.get_background_image(source)
             fov_x_deg = 15
             fov_y_deg = fov_x_deg * image_bg.shape[0] / image_bg.shape[1]
             self.VP.H, self.VP.W = image_bg.shape[:2]
@@ -617,17 +669,5 @@ class Pipeliner:
             image = tools_draw_numpy.draw_text(image, obj_id.astype(str), (int(X), int(Y)), color_fg=color_fg,clr_bg=col, font_size=font_size, hor_align='center', vert_align='center')
 
 
-        return image
-# ----------------------------------------------------------------------------------------------------------------------
-    def draw_trajectories(self,df_pred):
-        points = df_pred[['x1', 'y1', 'x2', 'y2']].values
-        centers = numpy.concatenate((points[:, [0, 2]].mean(axis=1).reshape((-1, 1)),points[:, [1, 3]].mean(axis=1).reshape((-1, 1))), axis=1).astype(float).reshape((-1, 2))
-        image = numpy.full((int(centers[:, 1].max()), int(centers[:, 0].max()), 3), 32, dtype=numpy.uint8)
-        colors = (0,0,200)
-        if 'lane_number' in df_pred.columns:
-            colors80 = tools_draw_numpy.get_colors(80, shuffle=True)
-            colors = [colors80[(l - 1) % 80] for l in df_pred['lane_number'].values]
-
-        image = tools_draw_numpy.draw_points(image,centers,color=colors,w=4)
         return image
 # ----------------------------------------------------------------------------------------------------------------------
