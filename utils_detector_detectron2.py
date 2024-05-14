@@ -35,15 +35,16 @@ class Detector_detectron2:
         rects = detections['instances'].pred_boxes.tensor.cpu().numpy()
         class_ids = detections['instances'].pred_classes.cpu().numpy()
         dct_class_names = self.predictor.metadata.thing_classes
+        class_names = numpy.array([dct_class_names[i] for i in class_ids])
 
         if do_debug and isinstance(filename_in, str):
             image_res = tools_image.desaturate(image)
             image_res = self.draw_detections(image_res,rects,class_ids, confs,dct_class_names)
             cv2.imwrite(self.folder_out + filename_in.split('/')[-1], image_res)
 
-        df_pred = pd.DataFrame(
-            numpy.concatenate((class_ids.reshape((-1, 1)), rects.reshape((-1, 4)), confs.reshape(-1, 1)), axis=1),columns=['class_ids', 'x1', 'y1', 'x2', 'y2', 'conf'])
-        df_pred = df_pred.astype({'class_ids':int, 'x1': int, 'y1': int, 'x2': int, 'y2': int, 'conf': float})
+        df_pred = pd.DataFrame(numpy.concatenate((class_ids.reshape((-1, 1)), rects.reshape((-1, 4)), confs.reshape(-1, 1)), axis=1),columns=['class_ids', 'x1', 'y1', 'x2', 'y2', 'conf'])
+        df_pred = df_pred.astype({'class_ids': int, 'x1': int, 'y1': int, 'x2': int, 'y2': int, 'conf': float})
+        df_pred['class_name'] = class_names
 
         return df_pred
 # ----------------------------------------------------------------------------------------------------------------------

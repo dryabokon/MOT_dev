@@ -327,6 +327,8 @@ class Track_Visualizer:
             image = cv2.imread(folder_in+filename)
             xyxy = df_pred[df_pred['frame_id'] == frame_id][['x1','y1','x2','y2']].values
             image_cut, mask = self.cut_boxes_at_original(image, xyxy)
+            if image_cut.shape[0]!=image_S.shape[0] or image_cut.shape[1]!=image_S.shape[1]:
+                continue
             image_S+=image_cut
             image_C+=mask
 

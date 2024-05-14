@@ -29,6 +29,7 @@ class Detector_LPVD:
             class_ids = res[0].boxes.cls.cpu().numpy()
             dct_class_names = res[0].names
             confs = res[0].boxes.conf.cpu().numpy()
+            class_names = numpy.array([dct_class_names[i] for i in class_ids])
 
         if do_debug and isinstance(filename_in, str):
             image_res = tools_image.desaturate(image)
@@ -37,8 +38,7 @@ class Detector_LPVD:
 
         df_pred = pd.DataFrame(numpy.concatenate((class_ids.reshape((-1, 1)), rects.reshape((-1, 4)), confs.reshape(-1, 1)), axis=1),columns=['class_ids', 'x1', 'y1', 'x2', 'y2', 'conf'])
         df_pred = df_pred.astype({'class_ids': int, 'x1': int, 'y1': int, 'x2': int, 'y2': int, 'conf': float})
-        df_pred = df_pred[df_pred['class_ids'] == 1.0]
-        #df_pred.reset_index(inplace=True)
+        df_pred['class_name'] = class_names
 
         return df_pred
 # ----------------------------------------------------------------------------------------------------------------------

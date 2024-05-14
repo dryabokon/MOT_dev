@@ -3,12 +3,12 @@ img="conda-image-tracker_mmr:latest"
 #source="./images/international/lviv.avi"
 #n_lanes=
 #-----------------------------------------------------------------------------------------------------------------
-#source="./images/international/UA4L.MP4"
-#n_lanes=4
+source="./images/international/UA4L.MP4"
+n_lanes=4
 #-----------------------------------------------------------------------------------------------------------------
-source="./images/international/20240426_185749_C3E9_B8A44FAE9F1B.mp4"
-n_lanes=0
+#source="./images/international/20240426_185749_C3E9_B8A44FAE9F1B.mp4"
+#n_lanes=0
 #-----------------------------------------------------------------------------------------------------------------
-limit=10
+limit=130
 #-----------------------------------------------------------------------------------------------------------------
-docker run --gpus all -v ${PWD}:/home --workdir /home $img python3 main.py --input $source --n_lanes $n_lanes --limit $limit --tokenizer MMR
+docker run --gpus all -v ${PWD}:/home --workdir /home $img python3 main.py --input $source --n_lanes $n_lanes --limit $limit --tokenizer MMR --tracker BYTE

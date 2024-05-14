@@ -74,16 +74,25 @@ class Pipeliner:
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def update_pred(self,df_pred):
+        if isinstance(df_pred,str):
+            df_pred = pd.read_csv(df_pred)
+
         self.df_pred = self.name_columns(df_pred)
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def update_LP_GT(self,df_LP_GT):
+        if isinstance(df_LP_GT,str):
+            df_LP_GT = pd.read_csv(df_LP_GT)
         self.df_LP_GT = df_LP_GT
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def match_E(self,df_det,df_track):
 
         col_start = [c for c in df_det.columns].index('conf') + 1
+        CCC = [c for c in df_det.columns[col_start:-1]]
+        if 'class_ids' not in CCC and 'class_ids' in df_det.columns:
+            CCC+=['class_ids']
+
         emb_C = df_det.shape[1]-col_start
         if emb_C<=0: return df_track
 
@@ -98,12 +107,12 @@ class Pipeliner:
                 if val < 60:
                     df_track.iloc[r,-1] = idx
 
-            df_track = tools_DF.fetch(df_track,'row_id',df_det,'row_id',[c for c in df_det.columns[col_start:-1]])
+            df_track = tools_DF.fetch(df_track,'row_id',df_det,'row_id',[c for c in CCC])
             df_det.drop(columns=['row_id'], inplace=True)
             df_track.drop(columns=['row_id'], inplace=True)
 
         else:
-            df_E = pd.DataFrame(numpy.full((df_track.shape[0], emb_C),numpy.nan), columns=df_det.columns[col_start:])
+            df_E = pd.DataFrame(numpy.full((df_track.shape[0], emb_C),numpy.nan), columns=CCC)
             df_E = df_E.astype({c:str(df_det[c].dtype) for c in df_E.columns.values})
             df_track = pd.concat([df_track,df_E], axis=1)
 
@@ -161,9 +170,6 @@ class Pipeliner:
                 df_embedding = self.__get_features(filename, df_det,frame_id)
                 df_det = pd.concat([df_det, df_embedding], axis=1)
 
-            if frame_id == 65:
-                df_det = pd.DataFrame([], columns=['class_ids', 'x1', 'y1', 'x2', 'y2', 'conf'])
-
             df_track = self.__get_tracks(filename, df_det, frame_id=frame_id,do_debug=do_debug)
             df_track = self.match_E(df_det, df_track)
 
@@ -195,7 +201,7 @@ class Pipeliner:
 
         if os.path.isfile(self.folder_out + 'df_true2.csv'):os.remove(self.folder_out + 'df_true2.csv')
         if os.path.isfile(self.folder_out + 'df_pred2.csv'):os.remove(self.folder_out + 'df_pred2.csv')
-        self.df_pred = self.name_columns(pd.read_csv(self.folder_out + 'df_track.csv', sep=','))
+        #self.df_pred = self.name_columns(pd.read_csv(self.folder_out + 'df_track.csv', sep=','))
         self.TP.stage_stats(self.folder_out + 'time_profile.csv')
         return
 # ----------------------------------------------------------------------------------------------------------------------
@@ -368,27 +374,25 @@ class Pipeliner:
         tools_IO.remove_folders(self.folder_out)
         tools_IO.remove_files(self.folder_out, 'profile_*.png')
 
+
         if 'lp_symb' in self.df_pred.columns:
+            df_LPR0 = tools_DF.my_agg(self.df_pred, cols_groupby=['track_id'],cols_value=['lp_symb'], aggs=['top'])
             self.df_pred['lp_symb'] = self.df_pred['lp_symb'].apply(lambda x: x if self.is_valid_LP(str(x)) else None)
             df_LPR = tools_DF.my_agg(self.df_pred,cols_groupby=['track_id'],cols_value=['lp_symb','model_color','mmr_type'],aggs=['top','top','top'])
+            idx = df_LPR['lp_symb'].isna()
+            df_LPR.loc[idx, 'lp_symb'] = df_LPR0.loc[idx, 'lp_symb']
             df_LPR.to_csv(self.folder_out + 'df_LPs.csv', index=False)
         else:
             df_LPR = pd.DataFrame([])
 
         for obj_id in tqdm(self.df_pred['track_id'].unique(), total=self.df_pred['track_id'].unique().shape[0],desc=inspect.currentframe().f_code.co_name):
             df_repr = self.df_pred[self.df_pred['track_id'] == obj_id].copy()
-            if 'lp_symb' in df_repr.columns:
-                df_repr['lp_symb_good'] = df_repr['lp_symb'].apply(lambda x: x if self.is_valid_LP(str(x)) else None)
-                df_repr = df_repr.sort_values(by='lp_symb_good',ascending=False)
-
             image = get_image(source, df_filenames, df_repr.iloc[0]['frame_id'])
             rect = df_repr.iloc[0][['x1', 'y1', 'x2', 'y2']].values.astype(int)
             image_crop = image[rect[1]:rect[3], rect[0]:rect[2]]
-            if 'lp_symb' in df_repr:
-                lp_symb,model_color, mmr_type = tools_DF.my_agg(df_repr, cols_groupby=['track_id'],cols_value=['lp_symb','model_color', 'mmr_type'], aggs=['top','top', 'top'])[['lp_symb','model_color','mmr_type']].values.tolist()[0]
-                lp_symb, model_color, mmr_type = str(lp_symb), str(model_color), str(mmr_type)
-            else:
-                lp_symb, model_color, mmr_type = 'nan','nan','nan'
+
+            lp_symb,model_color,mmr_type = df_LPR[df_LPR['track_id'] == obj_id][['lp_symb','model_color','mmr_type']].values[0].astype(str)
+
             image_crop = tools_draw_numpy.draw_text(image_crop, mmr_type, (10, 10), font_size=20, color_fg=(255, 255, 255),clr_bg=(128,128,128),alpha_transp=0.5)
             if self.Tokenizer is not None:
                 image_crop = tools_draw_numpy.draw_text(image_crop, '█', (10, 30), font_size=20,color_fg=self.Tokenizer.dct_mmr_clr[model_color], clr_bg=None)
@@ -465,7 +469,7 @@ class Pipeliner:
         self.df_pred['lane_number'] = self.df_pred['bev_x'].apply(lambda x: numpy.argmin(abs(df_a['bev_x'] - x)))
         return
 # ----------------------------------------------------------------------------------------------------------------------
-    def pipe_11_draw_dashboard(self, source,font_size=24):
+    def pipe_11_draw_dashboard(self, source,mode_simple=False,attribute=None,font_size=64):
         is_video = ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower())
         if is_video:
             vidcap = cv2.VideoCapture(source)
@@ -498,7 +502,10 @@ class Pipeliner:
             self.df_pred['lane_number'] = 0
 
         image_time_lapse = self.draw_time_lapse(self.df_pred, H=int(H * 0.1),W=W,font_size=font_size)
-        self.draw_dashboard(source, self.df_pred, image_BEV=image_BEV, h_ipersp=h_ipersp,image_time_lapse=image_time_lapse,font_size=font_size)
+        if mode_simple:
+            self.draw_dashboard_simple(source, self.df_pred,font_size=font_size,attribute=attribute)
+        else:
+            self.draw_dashboard(source, self.df_pred, image_BEV=image_BEV, h_ipersp=h_ipersp,image_time_lapse=image_time_lapse,font_size=font_size)
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def pipe_12_make_video(self,source):
@@ -525,48 +532,38 @@ class Pipeliner:
         df_Q = df_Q.iloc[:,idx[::-1]]
 
         return df_Q
-# ----------------------------------------------------------------------------------------------------------------------
-    def extract_objects(self,folder_in):
 
-        def process_image(image,frame_id):
-            df_pred = self.Detector.get_detections(image, do_debug=True)
-            if df_pred is None: return
-            for r in range(df_pred.shape[0]):
-                rect = df_pred.iloc[r].iloc[1:5].values.astype(int)
-                image = image[rect[1]:rect[3], rect[0]:rect[2]]
-                obj_type = int(df_pred.iloc[r].iloc[0])
-                confidence = int(df_pred.iloc[r].iloc[5] * 100)
-                filename_out = 'im_%02d_%03d_%03d.png' % (obj_type, frame_id, r)
-                cv2.imwrite(self.folder_out + filename_out, image)
-
-                mode = 'a+' if os.path.exists(self.folder_out + 'descript.ion') else 'w'
-                with open(self.folder_out + "descript.ion", mode=mode) as f_handle:
-                    f_handle.write("%s %s\n" % (filename_out, '%03d' % confidence))
-            return
-
-        tools_IO.remove_files(self.folder_out, '*.jpg,*.ion')
-        is_video = ('mp4' in folder_in) or ('avi' in folder_in)
-
-        if is_video:
-            vidcap = cv2.VideoCapture(folder_in)
-            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
-            vidcap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            for i in tqdm(range(total_frames), total=total_frames, desc=inspect.currentframe().f_code.co_name):
-                vidcap.set(cv2.CAP_PROP_POS_FRAMES, i)
-                success, image = vidcap.read()
-                process_image(image,i)
-        else:
-            filenames = tools_IO.get_filenames(folder_in, '*.jpg')
-            for i, filename in tqdm(enumerate(filenames), total=len(filenames), desc=inspect.currentframe().f_code.co_name):
-                image = cv2.imread(folder_in+filename)
-                process_image(image,i)
-
-        return
 # ----------------------------------------------------------------------------------------------------------------------
     def get_conf_th(self):
         th = float(self.df_summary_custom.iloc[-1].iloc[-1]) if self.df_summary_custom is not None else 0.7
         return th
 # ----------------------------------------------------------------------------------------------------------------------
+    def draw_dashboard_simple(self, folder_in_images, df_pred,attribute='class_name',font_size=64):
+
+        labels_unique = df_pred[attribute].unique()
+        colors = tools_draw_numpy.get_colors(len(labels_unique), shuffle=False)
+        dct_color = dict(zip(labels_unique, colors))
+        dct_color.update({'nan': (128, 128, 128)})
+
+        filenames = tools_IO.get_filenames(folder_in_images, '*.jpg,*.png')[self.start:]
+        if self.limit is not None: filenames = filenames[:self.limit]
+
+        for i, filename in tqdm(enumerate(filenames), total=len(filenames),desc=inspect.currentframe().f_code.co_name):
+            frame_id = i + 1
+            if not os.path.isfile(folder_in_images + filename): continue
+            image = tools_image.desaturate(cv2.imread(folder_in_images + filename), level=0.25)
+
+            det = df_pred[(df_pred['frame_id'] == frame_id)]
+            if det.shape[0] > 0:
+                rects = det[['x1', 'y1', 'x2', 'y2']].values.reshape((-1,2,2)).astype(int)
+                labels = det[attribute].values.astype(str)
+                colors = [dct_color[l] for l in labels]
+                image = tools_draw_numpy.draw_rects(image,rects, colors=colors, w=1,labels=labels,font_size=font_size)
+
+            cv2.imwrite(self.folder_out + filename.split('.')[0] + '.jpg',image)
+        return
+# ----------------------------------------------------------------------------------------------------------------------
+
     def draw_dashboard(self, folder_in_images, df_pred, h_ipersp=None, image_BEV=None,image_time_lapse=None,font_size=64):
 
         filenames = tools_IO.get_filenames(folder_in_images, '*.jpg,*.png')[self.start:]
@@ -587,6 +584,7 @@ class Pipeliner:
             if det.shape[0]>0:
                 for obj_id in det['track_id'].unique():
                     color = colors80[(obj_id - 1) % 80]
+
                     color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
                     det_local = det[det['track_id']==obj_id].sort_values(by=['frame_id'],ascending=False)
                     if det_local['frame_id'].iloc[0] != frame_id:continue
@@ -599,9 +597,12 @@ class Pipeliner:
                         lines = numpy.concatenate((centers[:-1], centers[1:]), axis=1).astype(int)
                         image = tools_draw_numpy.draw_lines(image, lines, color=color, w=w, transperency=transperency,antialiasing=False)
 
-                    #image = tools_draw_numpy.draw_rects(image,points[0].reshape((1,2,2)),label ,color, w=1)
-                    image = tools_draw_numpy.draw_rect(image, int(points[0][0]), int(points[0][1]), int(points[0][2]), int(points[0][3]), color, w=1,label=str(obj_id),font_size= font_size,alpha_transp=0.9)
-                    #image = tools_draw_numpy.draw_text(image, str(obj_id), (int(cx[0]), int(cy[0])), color_fg=color_fg, clr_bg=color,font_size=font_size,hor_align='center',vert_align='center')
+                    # lst_base = ['frame_id', 'track_id', 'x1', 'y1', 'x2', 'y2', 'conf', 'lane_number']
+                    # lst_display = [c for c in det_local.columns if c not in lst_base]
+                    # label = ' '.join(det_local[lst_display].iloc[0].values.astype(str).tolist())
+
+                    label = str(obj_id)
+                    image = tools_draw_numpy.draw_rect(image, int(points[0][0]), int(points[0][1]), int(points[0][2]), int(points[0][3]), color, w=1,label=label,font_size= font_size,alpha_transp=0.9)
 
                     if 'mmr_type' in det_local.columns and 'conf_mmr' in det_local.columns and 'model_color' in det_local.columns and 'lp_symb' in det_local.columns:
                         mmr_type = det_local['mmr_type'].iloc[0]
@@ -635,7 +636,7 @@ class Pipeliner:
             image_time_lapse_local[:,x-1:x+1] = 128
             cv2.imwrite(self.folder_out + filename.split('.')[0] + '.jpg',numpy.concatenate((image, image_time_lapse_local), axis=0))
 
-        return image
+        return
 # ----------------------------------------------------------------------------------------------------------------------
     def draw_time_lapse(self,df_pred,W,H,font_size=24,conf_th=0.1):
 

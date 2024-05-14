@@ -11,7 +11,6 @@ import json
 import tools_mAP
 import tools_image
 import tools_draw_numpy
-import tools_DF
 # ----------------------------------------------------------------------------------------------------------------------
 class Tokenizer_MMR:
     def __init__(self,folder_out,df_true=pd.DataFrame([])):
@@ -214,15 +213,13 @@ class Tokenizer_MMR:
             #lp_type = self.dct_class_names_LP[idx_max] if lp_type_conf[idx_max] > 0.8 else 'unknown'
             LP_image,confs_LP_det,rect_LP = self.run_model_LPVD(im)
             LP_symb,conf_LP_read = self.run_model_symb(LP_image, do_debug=False)
+            LP_H, LP_W = LP_image.shape[:2] if LP_image is not None else (0,0)
+            veh_H, veh_W = im.shape[:2] if im is not None else (0,0)
 
-            E.append([model_color, mmr_type, LP_symb,conf_mmr,confs_LP_det,conf_LP_read])
-            #E.append([LP_symb,conf_LP_read])
+            E.append([model_color, mmr_type, LP_symb,veh_W,veh_H,LP_W,LP_H,conf_mmr,confs_LP_det,conf_LP_read])
 
-        df_E = pd.DataFrame(E, columns=['model_color', 'mmr_type', 'lp_symb','conf_mmr','conf_LP_read','conf_LP_det'])
-        df_E = df_E.astype({'model_color': str, 'mmr_type': str, 'lp_symb': str,'conf_mmr': float,'conf_LP_read': float,'conf_LP_det': float})
-
-        # df_E = pd.DataFrame(E, columns=['lp_symb','conf_LP_det'])
-        # df_E = df_E.astype({'lp_symb': str,'conf_LP_det': float})
+        df_E = pd.DataFrame(E, columns=['model_color', 'mmr_type', 'lp_symb','v_W','v_H','lp_W','lp_H','conf_mmr','conf_LP_read','conf_LP_det'])
+        df_E = df_E.astype({'model_color': str, 'mmr_type': str, 'lp_symb': str,'v_W':int,'v_H':int,'lp_W':int,'lp_H':int,'conf_mmr': float,'conf_LP_read': float,'conf_LP_det': float})
 
         if do_debug:
             df_t = self.df_true[self.df_true['frame_id'] == frame_id]
