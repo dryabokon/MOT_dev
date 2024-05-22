@@ -397,6 +397,8 @@ def fetch(df1,col_name1,df2,col_name2,col_value,col_new_name=None):
             else:
                 ddd = df2[[col_name2, col]].drop_duplicates(subset=[col_name2])
             V = pd.merge(df1[col_name1], ddd, how='left',left_on=col_name1, right_on=col_name2)[col]
+
+
             df_res[col if col_new_name is None else col_new_name[c]] = [v for v in V.values]
     else:
         if isinstance(col_name2,list):

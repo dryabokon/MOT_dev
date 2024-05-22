@@ -62,8 +62,19 @@ class Tracker_boxmot:
 
         return df_track
 # ----------------------------------------------------------------------------------------------------------------------
+#     def draw_tracks(self,image,rects,track_ids):
+#         colors = [self.colors80[track_id % 80] for track_id in track_ids]
+#         image = tools_draw_numpy.draw_rects(tools_image.desaturate(image), rects, colors, labels=track_ids.astype(str), w=2,alpha_transp=0.8)
+#         return image
+# ----------------------------------------------------------------------------------------------------------------------
     def draw_tracks(self,image,rects,track_ids):
         colors = [self.colors80[track_id % 80] for track_id in track_ids]
-        image = tools_draw_numpy.draw_rects(tools_image.desaturate(image), rects, colors, labels=track_ids.astype(str), w=2,alpha_transp=0.8)
+        image = tools_image.desaturate(image)
+        for rect,label,color in zip(rects,track_ids.astype(str),colors):
+            col_left, row_up, col_right, row_down = rect.flatten()
+            color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
+            image = tools_draw_numpy.draw_rect_fast(image, col_left, row_up, col_right, row_down ,color, w=2)
+            image = tools_draw_numpy.draw_text_fast(image, label, (int(col_left), int(row_up)), color_fg=color_fg, clr_bg=color,fontScale=16)
+
         return image
 # ----------------------------------------------------------------------------------------------------------------------

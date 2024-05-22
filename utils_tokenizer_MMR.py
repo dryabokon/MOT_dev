@@ -198,24 +198,52 @@ class Tokenizer_MMR:
         for r in range(df_pred.shape[0]):
             rect = df_pred.iloc[r][['x1','y1','x2','y2']].values.astype(int)
             im = image[rect[1]:rect[3],rect[0]:rect[2]]
-            #cv2.imwrite('temp.jpg', im)
             model_color = numpy.argmax(self.run_model_color(im))
             model_color = self.colors_dct[model_color]
 
             mmr_out = self.run_model_MMR(im)
             mmr_type = numpy.argmax(mmr_out)
             mmr_type = self.mmr_types_dct[mmr_type]
-            mmr_type = ' '.join(mmr_type.split('~')[1:3])
+            mmr_type = mmr_type.split('~')[1]
             conf_mmr = numpy.max(mmr_out)
+            E.append([model_color, mmr_type,conf_mmr])
 
-            #lp_type_conf = self.run_model_LP_type(im)
-            #idx_max = numpy.argmax(lp_type_conf)
-            #lp_type = self.dct_class_names_LP[idx_max] if lp_type_conf[idx_max] > 0.8 else 'unknown'
+        df_E = pd.DataFrame(E, columns=['model_color', 'mmr_type','conf_mmr'])
+        df_E = df_E.astype({'model_color': str, 'mmr_type': str,'conf_mmr': float})
+
+        if do_debug:
+            df_t = self.df_true[self.df_true['frame_id'] == frame_id]
+            df_pred_local = df_pred.copy()
+            df_pred_local['frame_id'] = frame_id
+            df_pred_local['track_id'] = -1
+            df_pred_local = df_pred_local[['frame_id', 'track_id', 'x1', 'y1', 'x2', 'y2', 'conf']]
+            df_true2, df_pred2 = self.B.calc_hits_stats_iou(df_t, df_pred_local, from_cache=False, verbose=False)
+
+            image = self.draw_features(image,df_pred2[['x1','y1','x2','y2']].values,df_E)
+            cv2.imwrite(self.folder_out + filename_in.split('/')[-1],image)
+
+        return df_E
+# ----------------------------------------------------------------------------------------------------------------------
+    def get_features_full(self,filename_in,df_pred,frame_id=0,do_debug=False):
+        image = cv2.imread(filename_in) if isinstance(filename_in, str) else filename_in
+
+        E = []
+        for r in range(df_pred.shape[0]):
+            rect = df_pred.iloc[r][['x1','y1','x2','y2']].values.astype(int)
+            im = image[rect[1]:rect[3],rect[0]:rect[2]]
+            model_color = numpy.argmax(self.run_model_color(im))
+            model_color = self.colors_dct[model_color]
+
+            mmr_out = self.run_model_MMR(im)
+            mmr_type = numpy.argmax(mmr_out)
+            mmr_type = self.mmr_types_dct[mmr_type]
+            #mmr_type = ' '.join(mmr_type.split('~')[1:3])
+            mmr_type = mmr_type.split('~')[1]
+            conf_mmr = numpy.max(mmr_out)
             LP_image,confs_LP_det,rect_LP = self.run_model_LPVD(im)
             LP_symb,conf_LP_read = self.run_model_symb(LP_image, do_debug=False)
             LP_H, LP_W = LP_image.shape[:2] if LP_image is not None else (0,0)
             veh_H, veh_W = im.shape[:2] if im is not None else (0,0)
-
             E.append([model_color, mmr_type, LP_symb,veh_W,veh_H,LP_W,LP_H,conf_mmr,confs_LP_det,conf_LP_read])
 
         df_E = pd.DataFrame(E, columns=['model_color', 'mmr_type', 'lp_symb','v_W','v_H','lp_W','lp_H','conf_mmr','conf_LP_read','conf_LP_det'])

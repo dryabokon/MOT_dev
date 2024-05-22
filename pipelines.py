@@ -6,37 +6,46 @@ import motmetrics as mm
 from tqdm import tqdm
 from sklearn.cluster import KMeans
 import inspect
+import yt_dlp
+import time
 # ----------------------------------------------------------------------------------------------------------------------
 import tools_DF
 import tools_IO
 import tools_image
 import tools_animation
 import tools_draw_numpy
+from CV import tools_fisheye
+from CV import tools_pr_geom
 # ----------------------------------------------------------------------------------------------------------------------
 import tools_mAP_visualizer
 import tools_time_profiler
 from CV import tools_vanishing
 # ----------------------------------------------------------------------------------------------------------------------
 class Pipeliner:
-    def __init__(self,folder_out,Detector,Tracker,Tokenizer=None,is_gt_xywh=False,obj_types_id=[],n_lanes=None,start=0,limit=None):
+    def __init__(self,folder_out,cnfg,cnf_viz,Detector,Tracker,Tokenizer=None,is_gt_xywh=False,obj_types_id=[]):
         if not os.path.isdir(folder_out):
             os.mkdir(folder_out)
         self.is_gt_xywh = is_gt_xywh
         self.obj_types_id = obj_types_id
         self.folder_runs = './runs/'
+
+        self.cnfg = cnfg
+        self.cnf_viz = cnf_viz
         self.df_summary = None
-        self.n_lanes = n_lanes
-        self.start = start
-        self.limit = limit
+        self.df_pred = None
+        self.df_summary_custom = None
+
         self.folder_in = None
         self.folder_out = folder_out
         self.Detector = Detector
         self.Tracker = Tracker
         self.Tokenizer = Tokenizer
         self.V = tools_mAP_visualizer.Track_Visualizer(folder_out,stack_h=False)
-        self.df_summary_custom = None
+
         self.TP = tools_time_profiler.Time_Profiler(verbose=False)
         self.VP = tools_vanishing.detector_VP(folder_out,W=2048,H=1536)
+        self.colors80 = tools_draw_numpy.get_colors(80, colormap='nipy_spectral', shuffle=True)
+
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def GPU_health_check(self):
@@ -92,8 +101,11 @@ class Pipeliner:
         CCC = [c for c in df_det.columns[col_start:-1]]
         if 'class_ids' not in CCC and 'class_ids' in df_det.columns:
             CCC+=['class_ids']
+        if 'class_name' not in CCC and 'class_name' in df_det.columns:
+            CCC+=['class_name']
 
-        emb_C = df_det.shape[1]-col_start
+
+        emb_C = len(CCC)
         if emb_C<=0: return df_track
 
         if df_track.shape[0] > 0:
@@ -104,10 +116,13 @@ class Pipeliner:
                 d1,d2,d3,d4 = abs(df_det['x1'] - row['x1']) , abs(df_det['y1'] - row['y1']) , abs(df_det['x2'] - row['x2'])  , abs(df_det['y2'] - row['y2'])
                 idx = numpy.argmin(d1+d2+d3+d4)
                 val = numpy.min(d1+d2+d3+d4)
-                if val < 60:
-                    df_track.iloc[r,-1] = idx
+                df_track.iloc[r,-1] = idx
+
 
             df_track = tools_DF.fetch(df_track,'row_id',df_det,'row_id',[c for c in CCC])
+            df_track[df_track['row_id']!=-1] = tools_DF.fetch(df_track[df_track['row_id']!=-1],'row_id', df_det,'row_id', ['x1','y1','x2','y2'])
+            df_track = df_track.astype({'x1':int,'y1':int,'x2':int,'y2':int})
+
             df_det.drop(columns=['row_id'], inplace=True)
             df_track.drop(columns=['row_id'], inplace=True)
 
@@ -138,9 +153,12 @@ class Pipeliner:
 
         return df_det
 # ----------------------------------------------------------------------------------------------------------------------
-    def __get_features(self,filename, df_det,frame_id):
+    def __get_features(self,filename, df_det,frame_id,mode_simple=True):
         self.TP.tic(inspect.currentframe().f_code.co_name)
-        df_embedding = self.Tokenizer.get_features(filename, df_det, frame_id=frame_id)
+        if mode_simple:
+            df_embedding = self.Tokenizer.get_features(filename, df_det, frame_id=frame_id)
+        else:
+            df_embedding = self.Tokenizer.get_features_full(filename, df_det, frame_id=frame_id)
         self.TP.tic(inspect.currentframe().f_code.co_name)
         return df_embedding
 # ----------------------------------------------------------------------------------------------------------------------
@@ -160,48 +178,125 @@ class Pipeliner:
         self.TP.tic(inspect.currentframe().f_code.co_name)
         return df_track
 # ----------------------------------------------------------------------------------------------------------------------
-    def pipe_01_track(self, source, do_debug=False):
-        def function(filename, frame_id, do_debug=False):
+    def __draw_detects(self,image,rects,labels=None):
+        if labels is None:
+            labels = ['' for r in rects]
 
-            mode = 'w' if frame_id == 1 else 'a'
-            df_det = self.__get_detections(filename, frame_id=frame_id)
+        colors = [self.colors80[ord(l[0]) % 80] for l in labels]
+        image = tools_image.desaturate(image,level=0.5)
+        for rect,label,color in zip(rects,labels,colors):
+            col_left, row_up, col_right, row_down = rect.flatten()
+            color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
+            image = tools_draw_numpy.draw_rect_fast(image, col_left, row_up, col_right, row_down ,color, w=2)
+            image = tools_draw_numpy.draw_text_fast(image, label, (int(col_left), int(row_up)), color_fg=color_fg, clr_bg=color,fontScale=16)
 
-            if self.Tokenizer is not None:
-                df_embedding = self.__get_features(filename, df_det,frame_id)
-                df_det = pd.concat([df_det, df_embedding], axis=1)
+        return image
+# ----------------------------------------------------------------------------------------------------------------------
+    def __draw_tracks(self,image,rects,track_ids,labels=None):
+        if labels is None:
+            labels = ['' for track_id in track_ids]
+        colors = [self.colors80[track_id % 80] for track_id in track_ids]
+        image = tools_image.desaturate(image,level=0.5)
+        for rect,track_id,label,color in zip(rects,track_ids.astype(str),labels,colors):
+            col_left, row_up, col_right, row_down = rect.flatten()
+            color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
+            image = tools_draw_numpy.draw_rect_fast(image, col_left, row_up, col_right, row_down ,color, w=2)
+            image = tools_draw_numpy.draw_text_fast(image, track_id, (int(col_left), int(row_up)), color_fg=color_fg, clr_bg=color,fontScale=16)
+            image = tools_draw_numpy.draw_text_fast(image, label, (int(col_left), int(row_down)), color_fg=(255,255,255),clr_bg=None, fontScale=10)
 
-            df_track = self.__get_tracks(filename, df_det, frame_id=frame_id,do_debug=do_debug)
-            df_track = self.match_E(df_det, df_track)
+        return image
+# ----------------------------------------------------------------------------------------------------------------------
+    def __process_frame(self, filename, frame_id, image_BEV=None,h_ipersp=None,do_debug=False):
 
-            df_det.to_csv(self.folder_out + 'df_det.csv', index=False, header=True if mode == 'w' else False, mode=mode,float_format='%.2f')
-            df_track.to_csv(self.folder_out + 'df_track.csv', index=False, header=True if mode == 'w' else False,mode=mode, float_format='%.2f')
-            return
+        mode = 'w' if frame_id == 1 else 'a'
+        df_det_frame = self.__get_detections(filename, frame_id=frame_id)
 
-        is_video = ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower())
+        if self.Tokenizer is not None:
+            df_embedding = self.__get_features(filename, df_det_frame,frame_id,mode_simple=self.cnfg.tokenizer_mode_simple)
+            df_det_frame = pd.concat([df_det_frame, df_embedding], axis=1)
 
-        if is_video:
+        df_track_frame = self.__get_tracks(filename, df_det_frame, frame_id=frame_id)
+        df_track_frame = self.match_E(df_det_frame, df_track_frame)
+
+        df_det_frame.to_csv(self.folder_out + 'df_det.csv', index=False, header=True if mode == 'w' else False, mode=mode,float_format='%.2f')
+        df_track_frame.to_csv(self.folder_out + 'df_track.csv', index=False, header=True if mode == 'w' else False,mode=mode, float_format='%.2f')
+
+        if self.df_pred is None:
+            if df_track_frame.shape[0] > 0:
+                self.df_pred = df_track_frame
+        else:
+            self.df_pred = pd.concat([self.df_pred, df_track_frame], axis=0)
+
+        image_debug = tools_image.desaturate(filename)
+        if do_debug and self.df_pred is not None:
+            det = self.df_pred[(self.df_pred['frame_id'] <= frame_id) & (self.df_pred['track_id'] >= 0)]
+            image_debug = self.draw_traces_normal(image_debug, det, frame_id)
+            if image_BEV is not None:
+                image_debug_BEV = self.draw_traces_BEV(image_BEV,h_ipersp,det,frame_id)
+                image_debug_BEV = cv2.resize(image_debug_BEV, (int(image_debug_BEV.shape[1] * image_debug.shape[0] / image_debug_BEV.shape[0]), image_debug.shape[0]),interpolation=cv2.INTER_NEAREST)
+                image_debug = numpy.concatenate([image_debug,image_debug_BEV],axis=1)
+
+        return image_debug
+# ----------------------------------------------------------------------------------------------------------------------
+    def pipe_01_track(self, source,do_debug=False):
+
+        if ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower()):mode = 'video'
+        elif ('https' in source) or (source=='0') :mode = 'stream'
+        else :mode = 'folder'
+
+        image_BEV, h_ipersp = None, None
+        if do_debug and self.cnfg.image_bg is not None:
+            image_BEV, h_ipersp = self.build_BEV_from_bg(fov_x_deg=self.cnfg.fov_x_deg, point_van_xy_ver=self.cnfg.point_van_xy_ver,image_bg=self.cnfg.image_bg, crop_rect=self.cnfg.crop_rect)
+
+        if mode=='video':
             vidcap = cv2.VideoCapture(source)
-            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.start
-            if self.limit is not None: total_frames = min(total_frames, self.limit)
-            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.start)
+            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.cnfg.start
+            if not ((self.cnfg.limit is None) or (self.cnfg.limit==0)): total_frames = min(total_frames, self.cnfg.limit)
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.cnfg.start)
             for i in tqdm(range(total_frames), total=total_frames, desc=inspect.currentframe().f_code.co_name):
                 success, image = vidcap.read()
                 if not success: continue
-                function(image, frame_id=i + 1, do_debug=do_debug)
-
-            tools_animation.folder_to_video(self.folder_out, self.folder_out + source.split('/')[-1], mask='*.jpg', framerate=24)
-            tools_IO.remove_files(self.folder_out, '*.jpg,*.ion')
+                if (self.cnfg.stride>2) and (i%self.cnfg.stride!=0): continue
+                image_debug = self.__process_frame(image, frame_id=i + 1, do_debug=do_debug)
+                if do_debug: cv2.imwrite(self.folder_out + 'frame_%06d.jpg' % (i + 1), image_debug)
             vidcap.release()
+
+        elif mode=='stream':
+            if source=='0':
+                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            else:
+                with yt_dlp.YoutubeDL({'format': 'bestvideo[ext=mp4]', 'noplaylist': True, 'quiet': True, 'simulate': True}) as ydl:
+                    cap = cv2.VideoCapture(ydl.extract_info(source, download=False)['url'])
+
+            frame_id =0
+            warmup = 20
+            start_time, fps = time.time(), 0
+            while True:
+                ret, frame = cap.read()
+                if frame_id == warmup:start_time = time.time()
+                #image_res = frame
+                image_res = self.__process_frame(frame, frame_id=frame_id,image_BEV=image_BEV,h_ipersp=h_ipersp,do_debug=True)
+                if (time.time() > start_time) and (frame_id > warmup): fps = (frame_id - warmup) / (time.time() - start_time)
+                image_res = tools_draw_numpy.draw_text_fast(image_res, '%.1f fps'%fps, (1200, 36), (255,255,255),(0,0,0),font_size=self.cnf_viz.font_size)
+                image_res = tools_image.smart_resize(image_res, target_image_height=None, target_image_width=1920)
+                cv2.imshow('live', image_res)
+                key = cv2.waitKey(1)
+                if key & 0xFF == 27: break
+                if key & 0xFF == 13:cv2.imwrite(self.folder_out + 'frame_%03d.jpg' % frame_id, image_res)
+                frame_id += 1
+
+            cap.release()
+            cv2.destroyAllWindows()
         else:
             self.folder_in = source
-            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.start:]
-            if self.limit is not None: filenames = filenames[:self.limit]
+            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.cnfg.start:]
+            if not ((self.cnfg.limit is None) or (self.cnfg.limit==0)): filenames = filenames[:self.cnfg.limit]
             for i,filename in tqdm(enumerate(filenames),total=len(filenames),desc=inspect.currentframe().f_code.co_name):
-                function(source + filename, frame_id=i + 1, do_debug=do_debug)
+                image_debug = self.__process_frame(source + filename, frame_id=i + 1, image_BEV=image_BEV,h_ipersp=h_ipersp,do_debug=do_debug)
+                if do_debug: cv2.imwrite(self.folder_out + 'frame_%06d.jpg' % (i + 1), image_debug)
 
         if os.path.isfile(self.folder_out + 'df_true2.csv'):os.remove(self.folder_out + 'df_true2.csv')
         if os.path.isfile(self.folder_out + 'df_pred2.csv'):os.remove(self.folder_out + 'df_pred2.csv')
-        #self.df_pred = self.name_columns(pd.read_csv(self.folder_out + 'df_track.csv', sep=','))
         self.TP.stage_stats(self.folder_out + 'time_profile.csv')
         return
 # ----------------------------------------------------------------------------------------------------------------------
@@ -362,13 +457,13 @@ class Pipeliner:
         is_video = ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower())
         if is_video:
             vidcap = cv2.VideoCapture(source)
-            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.start
-            if self.limit is not None: total_frames = min(total_frames, self.limit)
-            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.start)
+            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.cnfg.start
+            if self.cnfg.limit is not None: total_frames = min(total_frames, self.cnfg.limit)
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.cnfg.start)
             df_filenames = pd.DataFrame({'frame_id': numpy.arange(1, 1+total_frames)})
         else:
-            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.start:]
-            if self.limit is not None: filenames = filenames[:self.limit]
+            filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.cnfg.start:]
+            if self.cnfg.limit is not None: filenames = filenames[:self.cnfg.limit]
             df_filenames = pd.DataFrame({'frame_id': numpy.arange(1, 1 + len(filenames)), 'filename': filenames})
 
         tools_IO.remove_folders(self.folder_out)
@@ -387,20 +482,23 @@ class Pipeliner:
 
         for obj_id in tqdm(self.df_pred['track_id'].unique(), total=self.df_pred['track_id'].unique().shape[0],desc=inspect.currentframe().f_code.co_name):
             df_repr = self.df_pred[self.df_pred['track_id'] == obj_id].copy()
+            #df_repr = df_repr[df_repr['class_ids'].isin([2,5,7])]
+            if df_repr.shape[0] == 0: continue
             image = get_image(source, df_filenames, df_repr.iloc[0]['frame_id'])
             rect = df_repr.iloc[0][['x1', 'y1', 'x2', 'y2']].values.astype(int)
             image_crop = image[rect[1]:rect[3], rect[0]:rect[2]]
 
-            lp_symb,model_color,mmr_type = df_LPR[df_LPR['track_id'] == obj_id][['lp_symb','model_color','mmr_type']].values[0].astype(str)
+            filename_out = 'profile_%04d'%obj_id
+            if df_LPR.shape[0] > 0:
+                lp_symb,model_color,mmr_type = df_LPR[df_LPR['track_id'] == obj_id][['lp_symb','model_color','mmr_type']].values[0].astype(str)
+                image_crop = tools_draw_numpy.draw_text(image_crop, mmr_type, (10, 10), font_size=20, color_fg=(255, 255, 255),clr_bg=(128,128,128),alpha_transp=0.5)
+                if self.Tokenizer is not None:
+                    image_crop = tools_draw_numpy.draw_text(image_crop, '█', (10, 30), font_size=20,color_fg=self.Tokenizer.dct_mmr_clr[model_color], clr_bg=None)
+                image_crop = tools_draw_numpy.draw_text(image_crop, model_color, (30, 30), font_size=20,color_fg=(255, 255, 255),clr_bg=(128,128,128), alpha_transp=0.75)
+                image_crop = tools_draw_numpy.draw_text(image_crop, lp_symb, (image_crop.shape[1]//2, image_crop.shape[0]-30),font_size=20, color_fg=(0, 0, 0), clr_bg=(255, 255, 255),hor_align='center',alpha_transp=0.5)
+                filename_out+= (f'_{lp_symb}_{model_color}_{mmr_type}').replace(' ','_')
 
-            image_crop = tools_draw_numpy.draw_text(image_crop, mmr_type, (10, 10), font_size=20, color_fg=(255, 255, 255),clr_bg=(128,128,128),alpha_transp=0.5)
-            if self.Tokenizer is not None:
-                image_crop = tools_draw_numpy.draw_text(image_crop, '█', (10, 30), font_size=20,color_fg=self.Tokenizer.dct_mmr_clr[model_color], clr_bg=None)
-            image_crop = tools_draw_numpy.draw_text(image_crop, model_color, (30, 30), font_size=20,color_fg=(255, 255, 255),clr_bg=(128,128,128), alpha_transp=0.75)
-
-
-            image_crop = tools_draw_numpy.draw_text(image_crop, lp_symb, (image_crop.shape[1]//2, image_crop.shape[0]-30),font_size=20, color_fg=(0, 0, 0), clr_bg=(255, 255, 255),hor_align='center',alpha_transp=0.5)
-            cv2.imwrite(self.folder_out + (f'profile %03d_{lp_symb}_{model_color}_{mmr_type}'%obj_id).replace(' ','_') +'.png', image_crop)
+            cv2.imwrite(self.folder_out + filename_out +'.png', image_crop)
 
         return df_LPR
 # ----------------------------------------------------------------------------------------------------------------------
@@ -410,21 +508,17 @@ class Pipeliner:
             cv2.imwrite(self.folder_out + filename_out, image_clear_bg)
         return image_clear_bg
 # ----------------------------------------------------------------------------------------------------------------------
-    def pipe_10_draw_trajectories(self):
+    def pipe_10_draw_trajectories(self,H,W):
         points = self.df_pred[['x1', 'y1', 'x2', 'y2']].values
-        is_hit = self.df_pred['lp_symb'].isin(self.df_LP_GT['lp_symb'])
+        centers = numpy.concatenate((points[:, [0, 2]].mean(axis=1).reshape((-1, 1)), points[:, [1, 3]].mean(axis=1).reshape((-1, 1))),axis=1).astype(float).reshape((-1, 2))
+        image = numpy.full((H,W, 3), 32, dtype=numpy.uint8)
 
-        centers = numpy.concatenate(
-            (points[:, [0, 2]].mean(axis=1).reshape((-1, 1)), points[:, [1, 3]].mean(axis=1).reshape((-1, 1))),
-            axis=1).astype(float).reshape((-1, 2))
-        image = numpy.full((int(centers[:, 1].max()), int(centers[:, 0].max()), 3), 32, dtype=numpy.uint8)
-        colors = [(100, 200, 0) if hit else (0, 0, 200) for hit in is_hit]
-        if 'lane_number' in self.df_pred.columns:
-            colors80 = tools_draw_numpy.get_colors(80, shuffle=True)
-            colors = [colors80[(l - 1) % 80] for l in self.df_pred['lane_number'].values]
+        # if 'lane_number' in self.df_pred.columns:
+        #     colors80 = tools_draw_numpy.get_colors(80, shuffle=True)
+        #     colors = [colors80[(l - 1) % 80] for l in self.df_pred['lane_number'].values]
 
-        image = tools_draw_numpy.draw_points(image, centers, color=colors, w=165, transperency=0.85)
-        cv2.imwrite(self.folder_out + 'trajectories.png', image)
+        image = tools_draw_numpy.draw_points(image, centers, color=(128,128,128), w=5)
+        #cv2.imwrite(self.folder_out + 'trajectories.png', image)
         return image
     # ----------------------------------------------------------------------------------------------------------------------
     def get_VP(self,image_debug=None):
@@ -450,6 +544,12 @@ class Pipeliner:
         return point_van_xy_ver, lines_vp_ver
 # ----------------------------------------------------------------------------------------------------------------------
     def enrich_lane_number(self,h_ipersp,n_lanes):
+        if self.df_pred is None:
+            return
+
+        if n_lanes==0:
+            self.df_pred['lane_number'] = 0
+            return
 
         self.df_pred['cx'] = (self.df_pred['x1'] + self.df_pred['x2']) / 2
         self.df_pred['cy'] = (self.df_pred['y1'] + self.df_pred['y2']) / 2
@@ -469,44 +569,22 @@ class Pipeliner:
         self.df_pred['lane_number'] = self.df_pred['bev_x'].apply(lambda x: numpy.argmin(abs(df_a['bev_x'] - x)))
         return
 # ----------------------------------------------------------------------------------------------------------------------
-    def pipe_11_draw_dashboard(self, source,mode_simple=False,attribute=None,font_size=64):
-        is_video = ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower())
-        if is_video:
-            vidcap = cv2.VideoCapture(source)
-            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))-self.start
-            if self.limit is not None: total_frames = min(total_frames, self.limit)
-            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.start)
-            for i in tqdm(range(total_frames), total=total_frames, desc='Extracting frames'):
-                success, image = vidcap.read()
-                cv2.imwrite(self.folder_out + 'frame_%06d.jpg' % i, image)
-                if not success: continue
-            vidcap.release()
-            source = self.folder_out
+    def build_BEV_from_source(self,source,fov_x_deg,point_van_xy_ver,crop_rect=None,image_bg=None):
 
-        filenames = tools_IO.get_filenames(source, '*.jpg')[:1]
-        H, W = cv2.imread(source + filenames[0]).shape[:2]
+        if image_bg is None:image_bg = self.get_background_image(source)
+        else:image_bg = cv2.imread(image_bg) if isinstance(image_bg, str) else image_bg
+        fov_y_deg = fov_x_deg * image_bg.shape[0] / image_bg.shape[1]
+        self.VP.H, self.VP.W = image_bg.shape[:2]
+        image_BEV, h_ipersp, cam_height_px, p_camera_BEV_xy, p_center_BEV_xy, lines_edges = (self.VP.build_BEV_by_fov_van_point(image_bg, fov_x_deg, fov_y_deg, point_van_xy_ver, do_rotation=False,crop_rect=crop_rect))
 
-        if self.n_lanes is not None:
-            image_bg = self.get_background_image(source)
-            fov_x_deg = 15
-            fov_y_deg = fov_x_deg * image_bg.shape[0] / image_bg.shape[1]
-            self.VP.H, self.VP.W = image_bg.shape[:2]
-            image_debug_trj = None  # image_debug_trj = self.V.draw_trajectories(self.df_pred)
-            point_van_xy_ver, lines_vp_ver  = self.get_VP(image_debug_trj)
-            image_BEV, h_ipersp, cam_height_px, p_camera_BEV_xy, p_center_BEV_xy, lines_edges = self.VP.build_BEV_by_fov_van_point(image_bg, fov_x_deg, fov_y_deg, point_van_xy_ver, do_rotation=False)
-            W+=(int(image_BEV.shape[1] * image_bg.shape[0] / image_BEV.shape[0]))
-            self.enrich_lane_number(h_ipersp,self.n_lanes)
-        else:
-            image_BEV = None
-            h_ipersp = None
-            self.df_pred['lane_number'] = 0
-
-        image_time_lapse = self.draw_time_lapse(self.df_pred, H=int(H * 0.1),W=W,font_size=font_size)
-        if mode_simple:
-            self.draw_dashboard_simple(source, self.df_pred,font_size=font_size,attribute=attribute)
-        else:
-            self.draw_dashboard(source, self.df_pred, image_BEV=image_BEV, h_ipersp=h_ipersp,image_time_lapse=image_time_lapse,font_size=font_size)
-        return
+        return image_BEV,h_ipersp
+# ----------------------------------------------------------------------------------------------------------------------
+    def build_BEV_from_bg(self, fov_x_deg, point_van_xy_ver, image_bg,crop_rect=None):
+        image_bg = cv2.imread(image_bg) if isinstance(image_bg, str) else image_bg
+        fov_y_deg = fov_x_deg * image_bg.shape[0] / image_bg.shape[1]
+        self.VP.H, self.VP.W = image_bg.shape[:2]
+        image_BEV, h_ipersp, cam_height_px, p_camera_BEV_xy, p_center_BEV_xy, lines_edges = (self.VP.build_BEV_by_fov_van_point(image_bg, fov_x_deg, fov_y_deg, point_van_xy_ver,do_rotation=False, crop_rect=crop_rect))
+        return image_BEV, h_ipersp
 # ----------------------------------------------------------------------------------------------------------------------
     def pipe_12_make_video(self,source):
         filename_out = source.split('/')[-1]
@@ -538,22 +616,22 @@ class Pipeliner:
         th = float(self.df_summary_custom.iloc[-1].iloc[-1]) if self.df_summary_custom is not None else 0.7
         return th
 # ----------------------------------------------------------------------------------------------------------------------
-    def draw_dashboard_simple(self, folder_in_images, df_pred,attribute='class_name',font_size=64):
+    def draw_dashboard_simple(self, folder_in_images, attribute='class_name',font_size=64):
 
-        labels_unique = df_pred[attribute].unique()
+        labels_unique = self.df_pred[attribute].unique().astype(str)
         colors = tools_draw_numpy.get_colors(len(labels_unique), shuffle=False)
         dct_color = dict(zip(labels_unique, colors))
         dct_color.update({'nan': (128, 128, 128)})
 
-        filenames = tools_IO.get_filenames(folder_in_images, '*.jpg,*.png')[self.start:]
-        if self.limit is not None: filenames = filenames[:self.limit]
+        filenames = tools_IO.get_filenames(folder_in_images, '*.jpg,*.png')[self.cnfg.start:]
+        if self.cnfg.limit is not None: filenames = filenames[:self.cnfg.limit]
 
         for i, filename in tqdm(enumerate(filenames), total=len(filenames),desc=inspect.currentframe().f_code.co_name):
             frame_id = i + 1
             if not os.path.isfile(folder_in_images + filename): continue
             image = tools_image.desaturate(cv2.imread(folder_in_images + filename), level=0.25)
 
-            det = df_pred[(df_pred['frame_id'] == frame_id)]
+            det = self.df_pred[(self.df_pred['frame_id'] == frame_id)]
             if det.shape[0] > 0:
                 rects = det[['x1', 'y1', 'x2', 'y2']].values.reshape((-1,2,2)).astype(int)
                 labels = det[attribute].values.astype(str)
@@ -563,78 +641,109 @@ class Pipeliner:
             cv2.imwrite(self.folder_out + filename.split('.')[0] + '.jpg',image)
         return
 # ----------------------------------------------------------------------------------------------------------------------
+    def draw_traces_normal(self, image, det, frame_id,traces_on=True,as_rects=True,list_of_attributes=[], font_size=16):
 
-    def draw_dashboard(self, folder_in_images, df_pred, h_ipersp=None, image_BEV=None,image_time_lapse=None,font_size=64):
+        if det.shape[0] > 0:
+            for obj_id in det['track_id'].unique():
+                color = self.colors80[(obj_id - 1) % 80]
+                color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
+                det_local = det[det['track_id'] == obj_id].sort_values(by=['frame_id'], ascending=False)
+                if det_local['frame_id'].iloc[0] != frame_id: continue
+                points = det_local[['x1', 'y1', 'x2', 'y2']].values
+                centers = numpy.concatenate((points[:, [0, 2]].mean(axis=1).reshape((-1, 1)), points[:, [1, 3]].mean(axis=1).reshape((-1, 1))),axis=1).astype(float).reshape((-1, 2))
 
-        filenames = tools_IO.get_filenames(folder_in_images, '*.jpg,*.png')[self.start:]
-        if self.limit is not None: filenames = filenames[:self.limit]
-        colors80 = tools_draw_numpy.get_colors(80, shuffle=True)
+                if traces_on:
+                    if det_local.shape[0] >= 2:
+                        lines = numpy.concatenate((centers[:-1], centers[1:]), axis=1).astype(int)
+                        for i in range(lines.shape[0]-1):
+                            image = tools_draw_numpy.draw_line_fast(image, lines[i,1],lines[i,0],lines[i+1,1],lines[i+1,0],color, w=font_size)
 
-        transperency = 0.5
-        w = 12
+                if as_rects:
+                    image = tools_draw_numpy.draw_rect_fast(image, int(points[0][0]), int(points[0][1]), int(points[0][2]),int(points[0][3]), color, w=1, label=str(obj_id), font_size=font_size,alpha_transp=0.9)
+                else:
+                    image = tools_draw_numpy.draw_text_fast(image, str(obj_id), (int(centers[0,0]), int(centers[0,1])), color_fg=color_fg,clr_bg=color, fontScale=font_size)
+
+                for i, a in enumerate(list_of_attributes):
+                    if a in det_local.columns:
+                        image = tools_draw_numpy.draw_text(image, str(det_local[a].iloc[0]),(int(centers[0,0]), int(centers[0,1] + 0.5 * font_size * i)),color_fg=(255, 255, 255), clr_bg=color, alpha_transp=0.75,font_size=0.75 * font_size, hor_align='center',vert_align='center')
+
+        return image
+# ----------------------------------------------------------------------------------------------------------------------
+    def draw_traces_BEV(self,image_BEV,h_ipersp,det,frame_id,traces_on=True,font_size=16):
+        image_BEV_local = image_BEV.copy()
+        if det.shape[0] > 0:
+            for obj_id in det['track_id'].unique():
+                color = self.colors80[(obj_id - 1) % 80]
+                color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
+                det_local = det[det['track_id'] == obj_id].sort_values(by=['frame_id'], ascending=False)
+                if det_local['frame_id'].iloc[0] != frame_id: continue
+                points = det_local[['x1', 'y1', 'x2', 'y2']].values
+                centers = numpy.concatenate((points[:, [0, 2]].mean(axis=1).reshape((-1, 1)), points[:, [1, 3]].mean(axis=1).reshape((-1, 1))),axis=1).astype(float).reshape((-1,1,2))
+                centers_BEV = cv2.perspectiveTransform(centers, h_ipersp).reshape((-1, 2))
+
+                if traces_on:
+                    if det_local.shape[0] >= 2:
+                        lines = numpy.concatenate((centers_BEV[:-1], centers_BEV[1:]), axis=1).astype(int)
+                        for i in range(lines.shape[0]-1):
+                            image_BEV_local = tools_draw_numpy.draw_line_fast(image_BEV_local, lines[i,1],lines[i,0],lines[i+1,1],lines[i+1,0],color, w=font_size//4)
+
+                image_BEV_local = tools_draw_numpy.draw_text_fast(image_BEV_local, str(obj_id), (int(centers_BEV[0, 0]), int(centers_BEV[0, 1])),color_fg=color_fg, clr_bg=color, font_size=font_size,hor_align='center')
+
+        return image_BEV_local
+# ----------------------------------------------------------------------------------------------------------------------
+    def pipe_11_draw_dashboard_BEV(self, source):
+
+        font_size = self.cnf_viz.font_size
+
+        is_video = ('mp4' in source.lower()) or ('avi' in source.lower()) or ('mkv' in source.lower())
+        if is_video:
+            vidcap = cv2.VideoCapture(source)
+            total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT)) - self.cnfg.start
+            if not ((self.cnfg.limit is None) or (self.cnfg.limit==0)): total_frames = min(total_frames, self.cnfg.limit)
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, self.cnfg.start)
+            for i in tqdm(range(total_frames), total=total_frames, desc='Extracting frames'):
+                success, image = vidcap.read()
+                if (self.cnfg.stride > 2) and (i % self.cnfg.stride != 0): continue
+                cv2.imwrite(self.folder_out + 'frame_%06d.jpg' % (i+1), image)
+                if not success: continue
+            vidcap.release()
+            source = self.folder_out
+
+        filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[:1]
+        H, W = cv2.imread(source + filenames[0]).shape[:2]
+
+        filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.cnfg.start:]
+        if self.cnfg.limit is not None: filenames = filenames[:self.cnfg.limit]
+
+        image_bg = self.get_background_image(source) if self.cnfg.image_bg is None else self.cnfg.image_bg
+        if self.cnfg.point_van_xy_ver is None:
+            image_debug_trj = self.pipe_10_draw_trajectories(H,W)
+            self.cnfg.point_van_xy_ver, lines_vp_ver = self.get_VP(image_debug_trj)
+        image_BEV, h_ipersp = self.build_BEV_from_bg(fov_x_deg=self.cnfg.fov_x_deg, point_van_xy_ver=self.cnfg.point_van_xy_ver, image_bg=image_bg,crop_rect=self.cnfg.crop_rect)
+        W += (int(image_BEV.shape[1] * image_bg.shape[0] / image_BEV.shape[0]))
+
+        self.enrich_lane_number(h_ipersp,self.cnfg.n_lanes)
+        image_time_lapse = self.draw_time_lapse(self.df_pred, H=int(H * 0.1), W=W,font_size=font_size//2) if self.cnf_viz.timelapse_on else None
 
         for i, filename in tqdm(enumerate(filenames), total=len(filenames), desc=inspect.currentframe().f_code.co_name):
-            frame_id = i + 1
-            if not os.path.isfile(folder_in_images + filename): continue
-
-            image = cv2.imread(folder_in_images + filename)
-            image = tools_image.desaturate(image,level=0.25)
-
-            det = df_pred[(df_pred['frame_id']<=frame_id) & (df_pred['track_id'] >= 0)]
-            if det.shape[0]>0:
-                for obj_id in det['track_id'].unique():
-                    color = colors80[(obj_id - 1) % 80]
-
-                    color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
-                    det_local = det[det['track_id']==obj_id].sort_values(by=['frame_id'],ascending=False)
-                    if det_local['frame_id'].iloc[0] != frame_id:continue
-                    points = det_local[['x1', 'y1', 'x2', 'y2']].values
-                    cx = points.reshape((-1, 4))[:, [0, 2]].mean(axis=1).reshape((-1, 1))
-                    cy = points.reshape((-1, 4))[:, [1, 3]].mean(axis=1).reshape((-1, 1))
-                    centers = numpy.concatenate((points[:, [0, 2]].mean(axis=1).reshape((-1, 1)),points[:, [1, 3]].mean(axis=1).reshape((-1, 1))), axis=1).astype(float).reshape((-1, 2))
-
-                    if det_local.shape[0]>=2:
-                        lines = numpy.concatenate((centers[:-1], centers[1:]), axis=1).astype(int)
-                        image = tools_draw_numpy.draw_lines(image, lines, color=color, w=w, transperency=transperency,antialiasing=False)
-
-                    # lst_base = ['frame_id', 'track_id', 'x1', 'y1', 'x2', 'y2', 'conf', 'lane_number']
-                    # lst_display = [c for c in det_local.columns if c not in lst_base]
-                    # label = ' '.join(det_local[lst_display].iloc[0].values.astype(str).tolist())
-
-                    label = str(obj_id)
-                    image = tools_draw_numpy.draw_rect(image, int(points[0][0]), int(points[0][1]), int(points[0][2]), int(points[0][3]), color, w=1,label=label,font_size= font_size,alpha_transp=0.9)
-
-                    if 'mmr_type' in det_local.columns and 'conf_mmr' in det_local.columns and 'model_color' in det_local.columns and 'lp_symb' in det_local.columns:
-                        mmr_type = det_local['mmr_type'].iloc[0]
-                        #conf_mmr = det_local['conf_mmr'].iloc[0]
-                        model_color = det_local['model_color'].iloc[0]
-                        LP_symb = det_local['lp_symb'].iloc[0]
-                        image = tools_draw_numpy.draw_text(image, str(mmr_type) + ' ' +  str(model_color) , (int(cx[0]), int(cy[0]+0.75*font_size)), color_fg=(255,255,255),alpha_transp=0.75,clr_bg=(64,64,64), font_size=0.75*font_size, hor_align='center',vert_align='center')
-                        image = tools_draw_numpy.draw_text(image, str(LP_symb) , (int(cx[0]), int(cy[0]+1.5*font_size)), color_fg=(255,255,255),clr_bg=(64,64,64), alpha_transp=0.75,font_size=0.75*font_size, hor_align='center',vert_align='center')
-
-            det = df_pred[(df_pred['frame_id'] == frame_id) & (df_pred['track_id'] >= 0)]
+            frame_id = int(filename.split('.')[0].split('_')[-1])
+            if not os.path.isfile(source + filename): continue
+            image = tools_image.desaturate(cv2.imread(source + filename),level=0.25)
+            det = self.df_pred[(self.df_pred['frame_id']<=frame_id) & (self.df_pred['track_id'] >= 0)]
+            image = self.draw_traces_normal(image, det, frame_id=frame_id, list_of_attributes=self.cnfg.attributes,traces_on=self.cnf_viz.traces_on_normal,as_rects=self.cnf_viz.as_rects,font_size=font_size)
 
             if image_BEV is not None:
-                image_BEV_local = image_BEV.copy()
-                if det.shape[0]>0:
-                    for obj_id in det['track_id'].unique():
-                        color = colors80[(obj_id - 1) % 80]
-                        color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
-                        det_local = det[det['track_id'] == obj_id].sort_values(by=['frame_id'], ascending=False)
-                        points = det_local[['x1', 'y1', 'x2', 'y2']].values
-                        label = str(obj_id)
-                        centers = numpy.concatenate((points[:,[0,2]].mean(axis=1).reshape((-1, 1)),points[:,[1,3]].mean(axis=1).reshape((-1, 1))),axis=1).astype(float).reshape((-1, 1, 2))
-                        points_BEV = cv2.perspectiveTransform(centers,h_ipersp).reshape((-1, 2))
-                        image_BEV_local = tools_draw_numpy.draw_text(image_BEV_local, label, (int(points_BEV[:,0]), int(points_BEV[:,1])), color_fg=color_fg,clr_bg=color, font_size=font_size, hor_align='center',vert_align='center')
-
-                image_BEV_local = cv2.resize(image_BEV_local, (int(image_BEV_local.shape[1] * image.shape[0] / image_BEV_local.shape[0]),image.shape[0]), interpolation=cv2.INTER_NEAREST)
+                image_BEV_local = self.draw_traces_BEV(image_BEV,h_ipersp,det,frame_id,traces_on=self.cnf_viz.traces_on_BEV,font_size=font_size)
+                image_BEV_local = cv2.resize(image_BEV_local, (int(image_BEV_local.shape[1] * image.shape[0] / image_BEV_local.shape[0]), image.shape[0]),interpolation=cv2.INTER_NEAREST)
                 image = numpy.concatenate((image, image_BEV_local), axis=1)
 
+            if image_time_lapse is not None:
+                image_time_lapse_local = cv2.resize(image_time_lapse, (image.shape[1],int(image_time_lapse.shape[0]*image.shape[1]/image_time_lapse.shape[1])), interpolation=cv2.INTER_NEAREST)
+                x = int(image_time_lapse.shape[1] * frame_id / self.df_pred['frame_id'].max())
+                image_time_lapse_local[:,x-1:x+1] = 128
+                image = numpy.concatenate((image, image_time_lapse_local),axis=0)
 
-            image_time_lapse_local = cv2.resize(image_time_lapse, (image.shape[1],int(image_time_lapse.shape[0]*image.shape[1]/image_time_lapse.shape[1])), interpolation=cv2.INTER_NEAREST)
-            x = int(image_time_lapse.shape[1] * frame_id / df_pred['frame_id'].max())
-            image_time_lapse_local[:,x-1:x+1] = 128
-            cv2.imwrite(self.folder_out + filename.split('.')[0] + '.jpg',numpy.concatenate((image, image_time_lapse_local), axis=0))
+            cv2.imwrite(self.folder_out + filename.split('.')[0] + '.jpg',image)
 
         return
 # ----------------------------------------------------------------------------------------------------------------------
@@ -667,8 +776,35 @@ class Pipeliner:
             color_fg = (0, 0, 0) if 10 * col[0] + 60 * col[1] + 30 * col[2] > 100 * 128 else (255, 255, 255)
             X = df_pos['position'].iloc[r]*(W-1)/df_pred['frame_id'].max()
             Y = step / 2 + step * df_pos['lane_number'].iloc[r]
-            image = tools_draw_numpy.draw_text(image, obj_id.astype(str), (int(X), int(Y)), color_fg=color_fg,clr_bg=col, font_size=font_size, hor_align='center', vert_align='center')
+            image = tools_draw_numpy.draw_text_fast(image, obj_id.astype(str), (int(X), int(Y)), color_fg=color_fg,clr_bg=col, font_size=font_size, hor_align='center', vert_align='center')
 
 
         return image
 # ----------------------------------------------------------------------------------------------------------------------
+    def fisheye_to_GIS(self):
+        im_source = cv2.imread('./images/AEK/road_CZ.jpg')
+        im_target = cv2.imread('./images/AEK/Image13.jpg')
+        p_source = numpy.array([[2638, 680],[886,758],[1266, 268],[3498,1350],[2978,334],[3584,744],[2922,1278],[3528,650],[3282,540]],dtype=numpy.float32).reshape((-1,2))
+        p_target = numpy.array([[810, 836], [857, 584], [953, 624], [688, 927],[913,1039],[756,1303],[767,830],[793,1313],[857,1127]])
+
+        C = tools_fisheye.Converter()
+        im_source2,p_source2 = C.remove_fisheye_effect(im_source,_dtype='linear', _format = 'fullframe', _fov=180, _pfov=160,xy=p_source)
+        idx = numpy.where(numpy.sum(p_source2,axis=1)>0)
+        p_source2 = p_source2[idx]
+        p_target = p_target[idx]
+
+        cv2.imwrite('./output/road_CZ_defisheye.png', tools_draw_numpy.draw_points(tools_image.desaturate(im_source2),p_source2,w=20))
+        cv2.imwrite('./output/road_CZ_fisheye.png',tools_draw_numpy.draw_points(tools_image.desaturate(im_source), p_source, w=20))
+
+
+        homography, status = tools_pr_geom.fit_homography(p_source2.reshape((-1, 1, 2)), p_target.reshape((-1, 1, 2)))
+        p_GIS = cv2.perspectiveTransform(p_source2.reshape((-1, 1, 2)).astype(numpy.float32), homography).reshape((-1, 2))
+
+
+        im_result = tools_draw_numpy.draw_points(tools_image.desaturate(im_target),p_GIS, w=20)
+
+        #image_trans = cv2.warpPerspective(im_source2, homography, (im_target.shape[1], im_target.shape[0]),borderValue=(0, 0, 0))
+        #result = tools_image.put_layer_on_image(im_target,image_trans,background_color = (0, 0, 0))
+        cv2.imwrite('./output/homohraphy_result2.png', im_result)
+        return
+    # ----------------------------------------------------------------------------------------------------------------------

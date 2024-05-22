@@ -67,7 +67,7 @@ def draw_points(image, points,color=(0,0,200),w=4,transperency=0,put_text=False,
         if numpy.any(numpy.isnan(p)): continue
         # if p[0]<0 or p[0]>=W or p[1]<0 or p[1]>=H:
         #     continue
-        clr = color if (len(numpy.array(color).shape) == 1) or type(color) == int else color[i].tolist()
+        clr = color if (len(numpy.array(color).shape) == 1) or type(color) == int else color[i]#.tolist()
         draw.ellipse((p[0]-w//2,p[1]-w//2,p[0]+1+w//2,p[1]+1+w//2),fill=(clr[0], clr[1], clr[2], int(255 - transperency * 255)),outline=None)
 
     result = numpy.array(pImage)
@@ -75,7 +75,7 @@ def draw_points(image, points,color=(0,0,200),w=4,transperency=0,put_text=False,
     for i,p in enumerate(points):
         if p is None: continue
         if numpy.any(numpy.isnan(p)): continue
-        clr = color if (len(numpy.array(color).shape) == 1) or type(color) == int else color[i].tolist()
+        clr = color if (len(numpy.array(color).shape) == 1) or type(color) == int else color[i]#.tolist()
         if put_text:
             cv2.putText(result, '%d %d'%(p[0],p[1]), (min(W - 10, max(10, p[0])), min(H - 5, max(10, p[1]))),cv2.FONT_HERSHEY_SIMPLEX, 1*w/12, clr, 1, cv2.LINE_AA)
 
@@ -85,6 +85,10 @@ def draw_points(image, points,color=(0,0,200),w=4,transperency=0,put_text=False,
 
     del draw
     return result
+# ----------------------------------------------------------------------------------------------------------------------
+def draw_line_fast(image, row1, col1, row2, col2, color_bgr,w=1):
+    image = cv2.line(image, (int(col1), int(row1)), (int(col2), int(row2)), (int(color_bgr[0]),int(color_bgr[1]),int(color_bgr[2])), thickness=w)
+    return image
 # ----------------------------------------------------------------------------------------------------------------------
 def draw_line(array_bgr, row1, col1, row2, col2, color_bgr, alpha_transp=0.0,antialiasing=True):
     res_rgb = array_bgr.copy()
@@ -141,8 +145,18 @@ def draw_lines(image, lines,color=(0,0,200),w=1,transperency=0,antialiasing=Fals
 
     return result
 # ----------------------------------------------------------------------------------------------------------------------
-def draw_rect_fast(image, col_left, row_up, col_right, row_down ,color, w=-1):
-    cv2.rectangle(image, (int(col_left), int(row_up)), (int(col_right), int(row_down)), (int(color[0]),int(color[1]),int(color[2])),thickness=w)
+def draw_rect_fast(image, col_left, row_up, col_right, row_down ,color, w=-1,alpha_transp=0.8,font_size=16,label=None):
+
+    if alpha_transp!=0:
+        overlay = image.copy()
+        cv2.rectangle(image, (int(col_left), int(row_up)), (int(col_right), int(row_down)),(int(color[0]), int(color[1]), int(color[2])), thickness=-1)
+        image = cv2.addWeighted(overlay, alpha_transp, image, 1 - alpha_transp, 0)
+        cv2.rectangle(image, (int(col_left), int(row_up)), (int(col_right), int(row_down)),(int(color[0]), int(color[1]), int(color[2])), thickness=w)
+    else:
+        cv2.rectangle(image, (int(col_left), int(row_up)), (int(col_right), int(row_down)),(int(color[0]), int(color[1]), int(color[2])), thickness=w)
+
+    color_fg = (0, 0, 0) if 10 * color[0] + 60 * color[1] + 30 * color[2] > 100 * 128 else (255, 255, 255)
+    image = draw_text_fast(image, label, (col_left, row_up), color_fg=color_fg,clr_bg=color, font_size=font_size)
     return image
 # ----------------------------------------------------------------------------------------------------------------------
 def draw_rect(image, col_left, row_up, col_right, row_down ,color, w=1, alpha_transp=0.8,font_size=16,label=None):
@@ -166,18 +180,18 @@ def draw_rect(image, col_left, row_up, col_right, row_down ,color, w=1, alpha_tr
 
     return result
 # ----------------------------------------------------------------------------------------------------------------------
-def draw_rects(image, rects, colors, labels=None, w=2, alpha_transp=0.8):
+def draw_rects(image, rects, colors, labels=None, w=2, font_size=32,alpha_transp=0.8):
 
     for i,r in enumerate(rects):
-        clr = colors if (len(numpy.array(colors).shape) == 1) or type(colors) == int else colors[i].tolist()
+        clr = colors if (len(numpy.array(colors).shape) == 1) or type(colors) == int else colors[i]#.tolist()
         label = None if labels is None else labels[i]
-        image = draw_rect(image,int(r[0,0]), int(r[0,1]), int(r[1,0]), int(r[1,1]), clr, w=w, label=label,alpha_transp=alpha_transp)
+        image = draw_rect(image,int(r[0,0]), int(r[0,1]), int(r[1,0]), int(r[1,1]), clr, w=w, label=label,font_size=font_size,alpha_transp=alpha_transp)
 
     return image
 # ----------------------------------------------------------------------------------------------------------------------
 def draw_circles_aa(image, centers, colors, clr_bg=(0,0,0),labels=None, w=2, transperency=0.8):
     for i,center in enumerate(centers):
-        clr = colors if (len(numpy.array(colors).shape) == 1) or type(colors) == int else colors[i].tolist()
+        clr = colors if (len(numpy.array(colors).shape) == 1) or type(colors) == int else colors[i]#.tolist()
         clr_bg_i = clr_bg if (len(numpy.array(clr_bg).shape) == 1) or type(clr_bg) == int else clr_bg[i].tolist()
         label = None if labels is None else labels[i]
         #image = draw_circle   (image,center[0], center[1], w, clr,alpha_transp=transperency)
@@ -185,20 +199,27 @@ def draw_circles_aa(image, centers, colors, clr_bg=(0,0,0),labels=None, w=2, tra
 
     return image
 # ----------------------------------------------------------------------------------------------------------------------
-def draw_text_fast(image,label,xy, color_fg,clr_bg=None,font_size=16,alpha_transp=0):
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    fontScale = 0.35
+def draw_text_fast(image,label,xy, color_fg,clr_bg=None,font_size=16,alpha_transp=0,hor_align='left',vert_align='top'):
+    font = cv2.FONT_HERSHEY_DUPLEX
+    fontScale = (font_size/32.0)
+
     result = image
     if clr_bg is not None:
         x, y = xy[0], xy[1]
         text_width, text_height = cv2.getTextSize(label, font, fontScale,thickness=1)[0]
-        total_display_str_height = 1.1*text_height
-        margin_top = numpy.ceil(0.30 * text_height)
-        margin_bottom = numpy.ceil(0.30 * text_height)
-        text_bottom = y if y > total_display_str_height else y + total_display_str_height
-        result = draw_rect_fast(image, x,text_bottom - text_height - margin_top,x + text_width,text_bottom + margin_bottom,clr_bg,w=-1)
+        total_display_str_height = text_height
 
-    result = cv2.putText(result, label, xy, font, fontScale, (int(color_fg[0]),int(color_fg[1]),int(color_fg[2])), 1,cv2.LINE_AA)
+        if vert_align == 'top':     pos = (x, xy[1])
+        elif vert_align == 'center':pos = (x, xy[1] - int(0.8 * total_display_str_height))
+        else:                       pos = (x, xy[1] - total_display_str_height)
+
+        if hor_align == 'left':     pos = (pos[0], pos[1])
+        elif hor_align == 'center': pos = (pos[0] - int(0.5 * text_width), pos[1])
+        else:                       pos = (pos[0] - text_width, pos[1])
+
+        cv2.rectangle(image, (pos[0],pos[1]),(pos[0] + text_width,pos[1]+text_height),(int(clr_bg[0]), int(clr_bg[1]), int(clr_bg[2])), thickness=-1)
+
+    result = cv2.putText(result, label, (pos[0],pos[1]+text_height), font, fontScale, (int(color_fg[0]),int(color_fg[1]),int(color_fg[2])), thickness=1,lineType=cv2.LINE_AA,bottomLeftOrigin=False)
     return result
 # ----------------------------------------------------------------------------------------------------------------------
 def draw_text(image,label,xy, color_fg,clr_bg=None,font_size=32,alpha_transp=0,hor_align='left',vert_align='top'):

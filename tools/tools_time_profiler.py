@@ -32,7 +32,9 @@ class Time_Profiler:
             self.current_event = event
             self.current_start[event] = time.time()
         else:
-            delta = time.time() - self.current_start[event]
+            delta=0
+            if event in self.current_start:
+                delta = time.time() - self.current_start[event]
             self.dict_event_time[self.current_event]+=delta
             self.dict_event_cnt[event] += 1
             self.current_event = None

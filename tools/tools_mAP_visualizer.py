@@ -315,7 +315,7 @@ class Track_Visualizer:
 
         return image, mask
     # ----------------------------------------------------------------------------------------------------------------------
-    def remove_bg(self,folder_in,df_pred,list_of_masks='*.jpg,*.png',limit=50):
+    def remove_bg(self,folder_in,df_pred,list_of_masks='*.jpg,*.png',limit=5000):
 
         filenames = tools_IO.get_filenames(folder_in, list_of_masks)[:limit]
         H,W = cv2.imread(folder_in+filenames[0]).shape[:2]

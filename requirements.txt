@@ -10,3 +10,4 @@ filterpy
 pykalman
 onnxruntime
 boxmot
+yt_dlp

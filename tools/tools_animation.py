@@ -91,7 +91,8 @@ def prepare_images(path_input, mask='*.png', framerate=10,stop_ms=0,duration_ms=
             image = tools_image.desaturate(image, 0.2)
             images.append(image)
     else:
-        II = numpy.linspace(0, len(filenames),int((duration_ms - stop_ms) * framerate / 1000 / (2 if do_reverce else 1)),endpoint=True).astype(numpy.int)
+        num = int((duration_ms - stop_ms) * framerate / 1000 / (2 if do_reverce else 1))
+        II = numpy.linspace(0, len(filenames),num,endpoint=True).astype(int)
 
 
         II[II == len(filenames)] = len(filenames) - 1

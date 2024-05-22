@@ -8,6 +8,8 @@ from PIL import Image
 from os import listdir
 import fnmatch
 from tqdm import tqdm
+import yt_dlp
+import tools_IO
 # ----------------------------------------------------------------------------------------------------------------------
 def do_rescale(image,scale,anti_aliasing=True,multichannel=False):
     pImage = Image.fromarray(image)
@@ -87,7 +89,7 @@ def extract_frames(filename_in,folder_out,prefix='',start_time_sec=0,end_time_se
     #tools_IO.remove_files(folder_out,create=True)
     vidcap = cv2.VideoCapture(filename_in)
     total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(total_frames)
+
     fps = vidcap.get(cv2.CAP_PROP_FPS)
     end_time = vidcap.get(cv2.CAP_PROP_POS_MSEC)
     vidcap.set(cv2.CAP_PROP_POS_MSEC, start_time_sec*1000)
@@ -99,7 +101,7 @@ def extract_frames(filename_in,folder_out,prefix='',start_time_sec=0,end_time_se
 
     with tqdm(total=total_frames) as pbar:
         while success:
-            pbar.update(count)
+            pbar.update(1)
             cv2.imwrite(folder_out+prefix+'%06d.jpg' % count, image)
             try:
                 success, image = vidcap.read()
@@ -171,7 +173,6 @@ def extract_frames_v3(filename_in,folder_out,frame_IDs,prefix='',scale=1):
 # ----------------------------------------------------------------------------------------------------------------------
 def grab_youtube_video(URL,out_path, out_filename):
 
-
     try:
         yt = YouTube(URL)
         stream_filtered = yt.streams.filter(file_extension="mp4")
@@ -183,4 +184,23 @@ def grab_youtube_video(URL,out_path, out_filename):
         df_log = pd.DataFrame({'URL':[],'title':[],'description':[],'author':[]})
 
     return df_log
+# ----------------------------------------------------------------------------------------------------------------------
+def grab_youtube_stream(source,folder_out,total_frames = 1000):
+    tools_IO.remove_files(folder_out,'*.jpg')
+
+    with yt_dlp.YoutubeDL({'format': 'bestvideo[ext=mp4]', 'noplaylist': True, 'quiet': True, 'simulate': True}) as ydl:
+        cap = cv2.VideoCapture(ydl.extract_info(source, download=False)['url'])
+
+
+    for i in tqdm(range(total_frames), total=total_frames):
+        ret, image = cap.read()
+        cv2.imwrite(folder_out + 'frame_%06d.jpg' % i, image)
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+    import tools_animation
+    tools_animation.folder_to_video(folder_out, folder_out+source.split('?v=')[-1]+'.mp4')
+
+    return
 # ----------------------------------------------------------------------------------------------------------------------

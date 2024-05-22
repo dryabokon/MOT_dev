@@ -15,12 +15,14 @@ class Detector_yolo:
         self.folder_out = folder_out
         self.device = device
 
-        self.model_detect = YOLO('yolov8n.pt')
+        self.model_detect = YOLO('yolov9e.pt')
         self.model_detect.to(device)
         self.colors80 = tools_draw_numpy.get_colors(80, colormap='nipy_spectral', shuffle=True)
         return
 # ----------------------------------------------------------------------------------------------------------------------
     def get_detections(self,filename_in, col_start=None,do_debug=False):
+        conf_th = 0.5
+
         image = cv2.imread(filename_in) if isinstance(filename_in, str) else filename_in
 
         res = self.model_detect.predict(source=image, verbose=False, device=self.device)
@@ -39,6 +41,7 @@ class Detector_yolo:
         df_pred = pd.DataFrame(numpy.concatenate((class_ids.reshape((-1, 1)),rects.reshape((-1, 4)), confs.reshape(-1, 1)), axis=1),columns=['class_ids',             'x1', 'y1', 'x2', 'y2', 'conf'])
         df_pred = df_pred.astype({'class_ids': int, 'x1': int, 'y1': int, 'x2': int, 'y2': int, 'conf': float})
         df_pred['class_name'] = class_names
+        #df_pred = df_pred[df_pred['conf'] > conf_th]
 
         return df_pred
 # ----------------------------------------------------------------------------------------------------------------------
