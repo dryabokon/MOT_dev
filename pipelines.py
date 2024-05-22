@@ -709,10 +709,9 @@ class Pipeliner:
             vidcap.release()
             source = self.folder_out
 
-        filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[:1]
-        H, W = cv2.imread(source + filenames[0]).shape[:2]
 
-        filenames = tools_IO.get_filenames(source, '*.jpg,*.png')[self.cnfg.start:]
+        filenames = tools_IO.get_filenames(source, 'frame_*.jpg')[self.cnfg.start:]
+        H, W = cv2.imread(source + filenames[0]).shape[:2]
         if self.cnfg.limit is not None: filenames = filenames[:self.cnfg.limit]
 
         image_bg = self.get_background_image(source) if self.cnfg.image_bg is None else self.cnfg.image_bg

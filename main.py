@@ -6,8 +6,8 @@ import tools_IO
 # ----------------------------------------------------------------------------------------------------------------------
 import pipelines
 import config_pipe,config_viz
-import utils_detector_yolo, utils_detector_LPVD, utils_detector_detectron2,utils_detector_cube_pyr
-import utils_tracker_deep_sort,utils_tracker_boxmot, utils_tracker_yolo,utils_tracker_optical_flow
+import utils_detector_yolo, utils_detector_LPVD#, utils_detector_detectron2,utils_detector_cube_pyr
+import utils_tracker_deep_sort,utils_tracker_boxmot, utils_tracker_yolo#,utils_tracker_optical_flow
 import utils_tokenizer_MMR,utils_tokenizer_cube_pyr
 # ----------------------------------------------------------------------------------------------------------------------
 folder_out = './output/'
